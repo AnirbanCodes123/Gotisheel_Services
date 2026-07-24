@@ -1,0 +1,11 @@
+# go2rtc config — streams are upserted by Gotisheel when cameras are added
+api:
+  listen: ":1984"
+
+webrtc:
+  listen: ":8555"
+
+rtsp:
+  listen: ":8554"
+
+streams: {}

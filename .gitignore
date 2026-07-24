@@ -1,0 +1,100 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment & local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local overrides (keep default.yaml)
+backend/config/local.yaml
+backend/config/local.yml
+
+# Runtime data & SQLite
+data/**/*.db
+data/**/*.sqlite
+data/**/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
+
+# Model weights (large binaries; keep directory via .gitkeep)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+data/models/*
+!data/models/.gitkeep
+
+# Event / media artifacts
+data/events/*
+!data/events/.gitkeep
+*.mp4
+*.avi
+*.mkv
+*.jpg
+*.jpeg
+*.png
+*.webp
+!frontend/**/*.svg
+
+# Frontend (Vite / Node)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# go2rtc / streaming caches
+go2rtc/*.log
+go2rtc/cache/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter / notebooks
+.ipynb_checkpoints/

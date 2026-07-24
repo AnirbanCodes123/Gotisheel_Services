@@ -1,0 +1,94 @@
+server:
+  host: "0.0.0.0"
+  port: 9100
+
+hardware:
+  device: "cuda:0"          # cuda:0 | cpu
+  ffmpeg_hwaccel: "cuda"    # cuda | none
+
+shards:
+  cameras_per_worker: 8
+  max_workers: 32
+
+detect:
+  default_fps: 4.0
+  jpeg_quality: 80
+
+stream:
+  live_fps: 10.0
+  mjpeg_enabled: true
+
+go2rtc:
+  enabled: true
+  api_url: "http://127.0.0.1:1984"
+  config_path: "go2rtc/go2rtc.yaml"
+
+webrtc:
+  enabled: true
+
+webhook:
+  enabled: true
+  server_url: "http://10.101.55.222:3000"
+  upload_endpoint: "/api/event/create-event"
+  event_image_max_kb: 900
+  thumbnail_max_kb: 25
+  thumbnail_size: [175, 175]
+  upload_timeout_seconds: 15
+
+db:
+  url: "sqlite:///./data/gotisheel.db"
+
+paths:
+  data_dir: "data"
+  models_dir: "data/models"
+  events_dir: "data/events"
+
+modules:
+  ppe:
+    enabled: true
+    model: "DS_PPE_6.pt"
+    labels: ["nohairnet", "nomask"]
+    nohairnet_confidence: 0.45
+    nomask_confidence: 0.45
+    cooldown_seconds: 45
+  frisking:
+    enabled: true
+    model: "yolo11l-pose.pt"
+    person_model: "yolo11l.pt"
+    labels: ["frisking_missed"]
+    confidence: 0.5
+    cooldown_seconds: 60
+  crowd:
+    enabled: true
+    model: "yolo11s.pt"
+    labels: ["crowd"]
+    person_threshold: 15
+    confidence: 0.4
+    cooldown_seconds: 120
+    disabled_windows:
+      - ["05:00", "06:30"]
+      - ["13:00", "14:30"]
+      - ["21:00", "22:30"]
+  loitering:
+    enabled: true
+    model: "yolo11s.pt"
+    labels: ["loitering"]
+    threshold_seconds: 1800
+    confidence: 0.35
+    miss_gap_seconds: 180
+    cooldown_seconds: 1800
+  sling:
+    enabled: true
+    model: "sling_4_11m_1500.pt"
+    labels: ["sling_psychrometer"]
+    confidence: 0.45
+    confirmation_count: 3
+    cooldown_seconds: 3600
+
+ffmpeg:
+  path: "ffmpeg"
+  transport: "tcp"
+  hw_device: "0"
+  connect_timeout_us: "5000000"
+  output_width: 1280
+  output_height: 720

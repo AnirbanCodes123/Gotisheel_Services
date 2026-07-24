@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gotisheel AI 2.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="app" class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">G</div>
+        <div>
+          <div class="brand-title">Gotisheel AI</div>
+          <div class="brand-sub">2.0 Platform</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button data-view="live" class="nav-item active">Live</button>
+        <button data-view="cameras" class="nav-item">Cameras</button>
+        <button data-view="events" class="nav-item">Events</button>
+        <button data-view="modules" class="nav-item">Modules</button>
+        <button data-view="models" class="nav-item">Models</button>
+        <button data-view="system" class="nav-item">System</button>
+        <button data-view="settings" class="nav-item">Settings</button>
+      </nav>
+      <div class="sidebar-foot" id="sys-mini">—</div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <h1 id="view-title">Live</h1>
+        <div class="top-actions">
+          <span class="pill" id="pill-device">device</span>
+          <span class="pill" id="pill-cams">0 cams</span>
+          <button id="btn-reload" class="btn ghost">Reload Workers</button>
+        </div>
+      </header>
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
