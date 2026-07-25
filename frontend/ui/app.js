@@ -290,8 +290,83 @@ function renderSettings() {
   </div>`;
 }
 
+function captureFormDrafts(root) {
+  const drafts = {};
+  root.querySelectorAll("form").forEach((form) => {
+    if (!form.id) return;
+    const fields = {};
+    form.querySelectorAll("input, select, textarea").forEach((el) => {
+      if (!el.name) return;
+      if (el.type === "file") return;
+      if (el.type === "checkbox" || el.type === "radio") {
+        const key = el.name;
+        if (!Array.isArray(fields[key])) fields[key] = [];
+        if (el.checked) fields[key].push(el.value);
+        return;
+      }
+      fields[el.name] = el.value;
+    });
+    drafts[form.id] = fields;
+  });
+  const active = document.activeElement;
+  const focus = active && root.contains(active)
+    ? {
+        formId: active.closest("form")?.id || null,
+        name: active.name || null,
+        type: active.type || null,
+        value: active.value,
+        selectionStart: active.selectionStart,
+        selectionEnd: active.selectionEnd,
+      }
+    : null;
+  return { drafts, focus };
+}
+
+function restoreFormDrafts(root, snapshot) {
+  if (!snapshot) return;
+  const { drafts, focus } = snapshot;
+  Object.entries(drafts || {}).forEach(([formId, fields]) => {
+    const form = root.querySelector(`#${CSS.escape(formId)}`);
+    if (!form) return;
+    Object.entries(fields).forEach(([name, value]) => {
+      const els = form.querySelectorAll(`[name="${CSS.escape(name)}"]`);
+      if (!els.length) return;
+      if (Array.isArray(value)) {
+        els.forEach((el) => {
+          if (el.type === "checkbox" || el.type === "radio") {
+            el.checked = value.includes(el.value);
+          }
+        });
+        return;
+      }
+      els.forEach((el) => {
+        if (el.type === "checkbox" || el.type === "radio") {
+          el.checked = el.value === value;
+        } else {
+          el.value = value;
+        }
+      });
+    });
+  });
+  if (focus?.formId && focus.name) {
+    const form = root.querySelector(`#${CSS.escape(focus.formId)}`);
+    const el = form?.querySelector(`[name="${CSS.escape(focus.name)}"]`);
+    if (el && el.type !== "file" && el.type !== "checkbox" && el.type !== "radio") {
+      el.focus();
+      if (typeof focus.selectionStart === "number" && typeof el.setSelectionRange === "function") {
+        try {
+          el.setSelectionRange(focus.selectionStart, focus.selectionEnd ?? focus.selectionStart);
+        } catch {
+          /* ignore unsupported input types */
+        }
+      }
+    }
+  }
+}
+
 function render() {
   const root = document.getElementById("view");
+  const snapshot = captureFormDrafts(root);
   const map = {
     live: renderLive,
     cameras: renderCameras,
@@ -302,6 +377,7 @@ function render() {
     settings: renderSettings,
   };
   root.innerHTML = (map[state.view] || renderLive)();
+  restoreFormDrafts(root, snapshot);
   bindViewHandlers();
 }
 
