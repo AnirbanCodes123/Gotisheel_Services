@@ -1,4 +1,4 @@
-"""Frisking missed — wraps frisking_bypass FriskingDetector (entrance/out)."""
+"""Frisking missed — wraps FriskingDetector (entrance/out), same as frisking_bypass/app_test.py."""
 
 from __future__ import annotations
 
@@ -12,13 +12,45 @@ import numpy as np
 from .base import CameraContext, DetectionEvent
 from .paths import resolve_model_path
 
-FRISKING_BYPASS = Path(__file__).resolve().parents[4] / "frisking_bypass"
+# Vendored copy ships with Gotisheel so servers don't need a sibling frisking_bypass/
+_BACKEND = Path(__file__).resolve().parents[2]  # .../backend
+_ROOT = Path(__file__).resolve().parents[3]  # .../Gotisheel_Services
 
 
-def _ensure_frisking_path() -> None:
-    path = str(FRISKING_BYPASS)
-    if path not in sys.path:
-        sys.path.insert(0, path)
+def _frisking_search_dirs() -> list[Path]:
+    env = os.getenv("GOTISHEEL_FRISKING_DIR") or os.getenv("FRISKING_BYPASS_DIR") or ""
+    dirs = [
+        Path(env) if env else None,
+        _BACKEND / "vendor" / "frisking_bypass",
+        _ROOT / "vendor" / "frisking_bypass",
+        _ROOT.parent / "frisking_bypass",
+        Path.cwd() / "frisking_bypass",
+        Path.cwd().parent / "frisking_bypass",
+    ]
+    return [d for d in dirs if d is not None]
+
+
+def _find_frisking_dir() -> Path:
+    for folder in _frisking_search_dirs():
+        if (folder / "frisking_rtsp_VA_entrance.py").is_file() and (folder / "frisking_rtsp_VA_out.py").is_file():
+            return folder.resolve()
+    searched = ", ".join(str(d) for d in _frisking_search_dirs())
+    raise FileNotFoundError(
+        "frisking_rtsp_VA_entrance.py not found. "
+        f"Expected under backend/vendor/frisking_bypass. Searched: {searched}"
+    )
+
+
+def _ensure_frisking_path() -> Path:
+    """Put frisking package dir first on sys.path (same pattern as app_test.py BASE_DIR)."""
+    frisking_dir = _find_frisking_dir()
+    path = str(frisking_dir)
+    # Drop stale entries then prepend so yolov8_model + VA modules resolve here
+    while path in sys.path:
+        sys.path.remove(path)
+    sys.path.insert(0, path)
+    # Also chdir-relative imports for botsort.yaml etc. — keep path absolute, don't chdir process
+    return frisking_dir
 
 
 def _resolve_mode(ctx: CameraContext) -> str:
@@ -47,6 +79,7 @@ class FriskingModule:
         self._detector_cls_entrance = None
         self._detector_cls_out = None
         self.security_loaded = False
+        self.frisking_dir: Optional[str] = None
 
     def load(self, model_path: str, device: str, config: dict[str, Any]) -> None:
         self.device = device
@@ -56,24 +89,29 @@ class FriskingModule:
         resolved_person = resolve_model_path(person) if person else None
         self.person_model_path = resolved_person or (person if str(person).endswith(".pt") else None)
 
-        # Resolve + preload security model BEFORE importing VA modules so
-        # `from yolov8_model.yolov8_api_demo import yolov8_detect_security` succeeds.
-        _ensure_frisking_path()
-        security_name = config.get("security_model") or "security_7.pt"
-        security_path = resolve_model_path(security_name) or resolve_model_path("security_6.pt")
-        if not security_path:
-            # fall back to package-local resolver
-            try:
-                from yolov8_model.yolov8_api_demo import resolve_security_model_path
+        frisking_dir = _ensure_frisking_path()
+        self.frisking_dir = str(frisking_dir)
+        print(f"[frisking] using package dir={frisking_dir}")
 
-                security_path = resolve_security_model_path(security_name)
-            except Exception:
-                security_path = None
+        security_name = config.get("security_model") or "security_7.pt"
+        security_path = (
+            resolve_model_path(security_name)
+            or resolve_model_path("security_6.pt")
+            or resolve_model_path("security_1.pt")
+        )
+        if not security_path:
+            # Prefer vendored security weights next to yolov8_model
+            for name in (security_name, "security_7.pt", "security_6.pt"):
+                cand = frisking_dir / "yolov8_model" / "security" / Path(name).name
+                if cand.is_file():
+                    security_path = str(cand.resolve())
+                    break
         self.security_model_path = security_path
         if security_path:
             os.environ["GOTISHEEL_SECURITY_MODEL"] = security_path
             os.environ["FRISKING_SECURITY_MODEL"] = security_path
 
+        yolov8_detect_security = None
         try:
             from yolov8_model.yolov8_api_demo import (
                 ensure_security_model,
@@ -87,14 +125,17 @@ class FriskingModule:
         except Exception as exc:
             self.security_loaded = False
             print(f"[frisking] WARNING security model not loaded: {exc}")
-            print("[frisking] place security_7.pt (or security_6.pt) in data/models/")
+            print(
+                "[frisking] place security_7.pt in data/models/ "
+                "or backend/vendor/frisking_bypass/yolov8_model/security/"
+            )
 
         try:
+            # Same imports as frisking_bypass/app_test.py (from package dir on sys.path)
             import frisking_rtsp_VA_entrance as entrance_logic
             import frisking_rtsp_VA_out as out_logic
 
-            # If detectors were previously imported with a stub, patch the live function.
-            if self.security_loaded:
+            if self.security_loaded and yolov8_detect_security is not None:
                 entrance_logic.yolov8_detect_security = yolov8_detect_security
                 out_logic.yolov8_detect_security = yolov8_detect_security
 
@@ -123,6 +164,7 @@ class FriskingModule:
         if cls is None:
             return None
         conf = float(self.config.get("confidence", 0.5))
+        # Match app_test.py detector construction
         detector = cls(
             model_path=self.pose_model_path,
             person_model_path=self.person_model_path,

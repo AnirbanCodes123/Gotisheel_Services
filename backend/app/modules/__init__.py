@@ -9,7 +9,7 @@ from ..core.config import get_config
 from .crowd import CrowdModule
 from .frisking import FriskingModule
 from .loitering import LoiteringModule
-from .paths import resolve_model_path
+from .paths import can_autodownload, resolve_model_path
 from .ppe import PPEModule
 from .sling import SlingModule
 
@@ -59,26 +59,31 @@ class ModuleRegistry:
                 continue
             instance = cls()
             model_name = mod_cfg.get("model") or ""
-            # Frisking also needs person_model resolved for logging
             path_str = resolve_model_path(model_name)
-            if not path_str and model_name:
-                # last resort: let Ultralytics try the bare name (may download)
+            if not path_str and model_name and can_autodownload(model_name):
+                # Official Ultralytics names may download; custom weights must exist on disk
                 path_str = model_name
             if not path_str:
-                msg = "no model configured"
+                msg = f"model file not found: {model_name or '(empty)'} (put it in data/models/)"
                 self.load_errors[module_id] = msg
                 print(f"[modules] skip {module_id}: {msg}")
                 continue
+            if Path(path_str).is_file():
+                print(f"[modules] resolved {module_id} -> {path_str}")
             # Resolve optional secondary models onto config for modules that need them
             if module_id == "frisking" and mod_cfg.get("person_model"):
                 person_path = resolve_model_path(mod_cfg.get("person_model"))
                 if person_path:
                     mod_cfg["person_model"] = person_path
+                elif not can_autodownload(str(mod_cfg.get("person_model"))):
+                    print(f"[modules] warn frisking person_model missing: {mod_cfg.get('person_model')}")
             if module_id == "frisking" and mod_cfg.get("security_model"):
                 security_path = resolve_model_path(mod_cfg.get("security_model"))
                 if security_path:
                     mod_cfg["security_model"] = security_path
                     print(f"[modules] frisking security_model={security_path}")
+                else:
+                    print(f"[modules] warn frisking security_model missing: {mod_cfg.get('security_model')}")
             try:
                 instance.load(path_str, device, mod_cfg)
                 self.modules[module_id] = instance

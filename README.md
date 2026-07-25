@@ -22,7 +22,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Copy your .pt weights into data/models/
-# e.g. DS_PPE_6.pt, yolo11s.pt, sling_4_11m_1500.pt
+# e.g. DS_PPE_6.pt, yolo11s.pt, sling_5_11m_1500.pt, security_7.pt
 
 chmod +x scripts/start_all.sh
 ./scripts/start_all.sh

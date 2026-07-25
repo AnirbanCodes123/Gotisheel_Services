@@ -92,7 +92,7 @@ modules:
     slot_merge_center_px: 120
   sling:
     enabled: true
-    model: "sling_4_11m_1500.pt"
+    model: "sling_5_11m_1500.pt"
     labels: ["sling_psychrometer", "no_sling_motion"]
     confidence: 0.55
     confirmation_count: 2
