@@ -5,6 +5,28 @@ cd "$ROOT"
 
 mkdir -p data/models data/events bin go2rtc
 
+# Runtime go2rtc.yaml is gitignored (streams get upserted). Seed from example once.
+if [[ ! -f "$ROOT/go2rtc/go2rtc.yaml" ]]; then
+  if [[ -f "$ROOT/go2rtc/go2rtc.yaml.example" ]]; then
+    cp "$ROOT/go2rtc/go2rtc.yaml.example" "$ROOT/go2rtc/go2rtc.yaml"
+    echo "[start] created go2rtc/go2rtc.yaml from example"
+  else
+    cat > "$ROOT/go2rtc/go2rtc.yaml" <<'YAML'
+api:
+  listen: ":1984"
+webrtc:
+  listen: ":8555"
+  candidates:
+    - 127.0.0.1
+    - stun:stun.l.google.com:19302
+rtsp:
+  listen: ":8554"
+streams: {}
+YAML
+    echo "[start] created default go2rtc/go2rtc.yaml"
+  fi
+fi
+
 GO2RTC_BIN=""
 GO2RTC_LOCAL="$ROOT/bin/go2rtc"
 GO2RTC_VERSION="${GOTISHEEL_GO2RTC_VERSION:-v1.9.14}"

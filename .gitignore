@@ -83,6 +83,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # go2rtc / streaming caches
+go2rtc/go2rtc.yaml
 go2rtc/*.log
 go2rtc/cache/
 bin/go2rtc
