@@ -6,6 +6,15 @@ const state = {
   system: null,
   config: null,
   models: null,
+  cameraDraft: {
+    name: "",
+    camera_id: "",
+    rtsp_url: "",
+    device: "",
+    stream_role: "both",
+    detect_fps: "0",
+    modules: [],
+  },
 };
 
 const viewTitles = {
@@ -40,13 +49,84 @@ function esc(value) {
     .replaceAll('"', "&quot;");
 }
 
+function isEditingForm() {
+  const el = document.activeElement;
+  return Boolean(el && el.closest && el.closest("#view form"));
+}
+
+function syncCameraDraftFromForm(form) {
+  if (!form) return;
+  const fd = new FormData(form);
+  state.cameraDraft = {
+    name: String(fd.get("name") || ""),
+    camera_id: String(fd.get("camera_id") || ""),
+    rtsp_url: String(fd.get("rtsp_url") || ""),
+    device: String(fd.get("device") || ""),
+    stream_role: String(fd.get("stream_role") || "both"),
+    detect_fps: String(fd.get("detect_fps") ?? "0"),
+    modules: [...form.querySelectorAll('input[name="modules"]:checked')].map((el) => el.value),
+  };
+}
+
+function resetCameraDraft() {
+  state.cameraDraft = {
+    name: "",
+    camera_id: "",
+    rtsp_url: "",
+    device: "",
+    stream_role: "both",
+    detect_fps: "0",
+    modules: [],
+  };
+}
+
 function setView(view) {
+  // Persist draft before leaving Cameras (in case form will be destroyed).
+  syncCameraDraftFromForm(document.getElementById("add-camera-form"));
   state.view = view;
   document.getElementById("view-title").textContent = viewTitles[view] || view;
   document.querySelectorAll(".nav-item").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === view);
   });
-  render();
+  render({ force: true });
+}
+
+function updateChrome() {
+  const cameras = state.cameras || [];
+  const online = cameras.filter((c) => c.runtime?.online).length;
+  document.getElementById("pill-cams").textContent = `${online}/${cameras.length} online`;
+  document.getElementById("pill-device").textContent =
+    state.system?.device || state.config?.hardware?.device || "—";
+  const cpu = state.system?.cpu_percent ?? 0;
+  const ram = state.system?.ram_percent ?? 0;
+  document.getElementById("sys-mini").textContent = `CPU ${cpu}% · RAM ${ram}%`;
+}
+
+function cameraRowsHtml() {
+  const rows = state.cameras
+    .map((cam) => {
+      return `<tr>
+        <td><strong>${esc(cam.name)}</strong><div class="muted">${esc(cam.camera_id)}</div></td>
+        <td class="muted" style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(cam.rtsp_url)}</td>
+        <td>${esc((cam.modules || []).join(", ") || "—")}</td>
+        <td>${esc(cam.device || "global")}</td>
+        <td><span class="badge ${cam.enabled ? "on" : "off"}">${cam.enabled ? "on" : "off"}</span></td>
+        <td>
+          <button class="btn ghost" data-toggle="${cam.id}">${cam.enabled ? "Disable" : "Enable"}</button>
+          <button class="btn danger" data-del="${cam.id}">Delete</button>
+        </td>
+      </tr>`;
+    })
+    .join("");
+  return rows || `<tr><td colspan="6" class="muted">No cameras</td></tr>`;
+}
+
+function patchCamerasTable() {
+  const tbody = document.querySelector("#cameras-table tbody");
+  if (!tbody) return false;
+  tbody.innerHTML = cameraRowsHtml();
+  bindCameraTableHandlers();
+  return true;
 }
 
 async function refresh() {
@@ -65,15 +145,26 @@ async function refresh() {
     state.system = system;
     state.config = config;
     state.models = models;
-    const online = cameras.filter((c) => c.runtime?.online).length;
-    document.getElementById("pill-cams").textContent = `${online}/${cameras.length} online`;
-    document.getElementById("pill-device").textContent = system?.device || config?.hardware?.device || "—";
-    const cpu = system?.cpu_percent ?? 0;
-    const ram = system?.ram_percent ?? 0;
-    document.getElementById("sys-mini").textContent = `CPU ${cpu}% · RAM ${ram}%`;
+    updateChrome();
+
+    // Never rebuild the Add Camera form while it exists / while typing.
+    if (state.view === "cameras" && document.getElementById("add-camera-form")) {
+      syncCameraDraftFromForm(document.getElementById("add-camera-form"));
+      patchCamerasTable();
+      return;
+    }
+    if (isEditingForm()) {
+      return;
+    }
     render();
   } catch (error) {
-    document.getElementById("view").innerHTML = `<div class="card" style="padding:16px;color:#ffb4b4">API error: ${esc(error.message)}</div>`;
+    // Do not destroy an in-progress form on transient API errors.
+    if (document.getElementById("add-camera-form") || isEditingForm()) {
+      console.warn("API refresh failed:", error);
+      return;
+    }
+    document.getElementById("view").innerHTML =
+      `<div class="card" style="padding:16px;color:#ffb4b4">API error: ${esc(error.message)}</div>`;
   }
 }
 
@@ -106,63 +197,73 @@ function renderLive() {
 }
 
 function renderCameras() {
+  const d = state.cameraDraft;
   const moduleChecks = state.modules
+    .map((m) => {
+      const checked = d.modules.includes(m.id) ? "checked" : "";
+      return `<label class="check"><input type="checkbox" name="modules" value="${esc(m.id)}" ${checked} ${
+        m.enabled ? "" : "disabled"
+      } /> ${esc(m.id)}</label>`;
+    })
+    .join("");
+
+  const deviceOpts = [
+    ["", "Global default"],
+    ["cuda:0", "GPU (cuda:0)"],
+    ["cpu", "CPU"],
+  ]
     .map(
-      (m) =>
-        `<label class="check"><input type="checkbox" name="modules" value="${esc(m.id)}" ${m.enabled ? "" : "disabled"} /> ${esc(m.id)}</label>`
+      ([value, label]) =>
+        `<option value="${esc(value)}" ${d.device === value ? "selected" : ""}>${esc(label)}</option>`
     )
     .join("");
-  const rows = state.cameras
-    .map((cam) => {
-      return `<tr>
-        <td><strong>${esc(cam.name)}</strong><div class="muted">${esc(cam.camera_id)}</div></td>
-        <td class="muted" style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(cam.rtsp_url)}</td>
-        <td>${esc((cam.modules || []).join(", ") || "—")}</td>
-        <td>${esc(cam.device || "global")}</td>
-        <td><span class="badge ${cam.enabled ? "on" : "off"}">${cam.enabled ? "on" : "off"}</span></td>
-        <td>
-          <button class="btn ghost" data-toggle="${cam.id}">${cam.enabled ? "Disable" : "Enable"}</button>
-          <button class="btn danger" data-del="${cam.id}">Delete</button>
-        </td>
-      </tr>`;
-    })
+
+  const roleOpts = [
+    ["both", "Detect + Live"],
+    ["detect", "Detect only"],
+    ["live", "Live only"],
+  ]
+    .map(
+      ([value, label]) =>
+        `<option value="${esc(value)}" ${d.stream_role === value ? "selected" : ""}>${esc(label)}</option>`
+    )
     .join("");
 
   return `
   <div class="grid" style="grid-template-columns: 1.1fr 1fr; align-items:start">
-    <form class="form" id="add-camera-form">
+    <form class="form" id="add-camera-form" autocomplete="off">
       <h3 style="margin:0">Add Camera</h3>
       <div class="form-row two">
-        <div class="form-row"><label>Name</label><input name="name" required placeholder="gate-1" /></div>
-        <div class="form-row"><label>Camera ID</label><input name="camera_id" placeholder="optional external id" /></div>
+        <div class="form-row"><label>Name</label><input name="name" required placeholder="gate-1" value="${esc(
+          d.name
+        )}" /></div>
+        <div class="form-row"><label>Camera ID</label><input name="camera_id" placeholder="optional external id" value="${esc(
+          d.camera_id
+        )}" /></div>
       </div>
-      <div class="form-row"><label>RTSP URL</label><input name="rtsp_url" required placeholder="rtsp://user:pass@host:554/stream" /></div>
+      <div class="form-row"><label>RTSP URL</label><input name="rtsp_url" required placeholder="rtsp://user:pass@host:554/stream" value="${esc(
+        d.rtsp_url
+      )}" /></div>
       <div class="form-row two">
         <div class="form-row">
           <label>Hardware</label>
-          <select name="device">
-            <option value="">Global default</option>
-            <option value="cuda:0">GPU (cuda:0)</option>
-            <option value="cpu">CPU</option>
-          </select>
+          <select name="device">${deviceOpts}</select>
         </div>
         <div class="form-row">
           <label>Stream role</label>
-          <select name="stream_role">
-            <option value="both">Detect + Live</option>
-            <option value="detect">Detect only</option>
-            <option value="live">Live only</option>
-          </select>
+          <select name="stream_role">${roleOpts}</select>
         </div>
       </div>
-      <div class="form-row"><label>Detect FPS (0 = global)</label><input name="detect_fps" type="number" step="0.1" value="0" /></div>
+      <div class="form-row"><label>Detect FPS (0 = global)</label><input name="detect_fps" type="number" step="0.1" value="${esc(
+        d.detect_fps
+      )}" /></div>
       <div class="form-row"><label>Detection modules</label><div class="checks">${moduleChecks}</div></div>
       <button class="btn" type="submit">Add Camera</button>
     </form>
     <div class="card" style="padding:0; overflow:auto">
-      <table>
+      <table id="cameras-table">
         <thead><tr><th>Camera</th><th>RTSP</th><th>Modules</th><th>HW</th><th>State</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="6" class="muted">No cameras</td></tr>`}</tbody>
+        <tbody>${cameraRowsHtml()}</tbody>
       </table>
     </div>
   </div>`;
@@ -290,83 +391,17 @@ function renderSettings() {
   </div>`;
 }
 
-function captureFormDrafts(root) {
-  const drafts = {};
-  root.querySelectorAll("form").forEach((form) => {
-    if (!form.id) return;
-    const fields = {};
-    form.querySelectorAll("input, select, textarea").forEach((el) => {
-      if (!el.name) return;
-      if (el.type === "file") return;
-      if (el.type === "checkbox" || el.type === "radio") {
-        const key = el.name;
-        if (!Array.isArray(fields[key])) fields[key] = [];
-        if (el.checked) fields[key].push(el.value);
-        return;
-      }
-      fields[el.name] = el.value;
-    });
-    drafts[form.id] = fields;
-  });
-  const active = document.activeElement;
-  const focus = active && root.contains(active)
-    ? {
-        formId: active.closest("form")?.id || null,
-        name: active.name || null,
-        type: active.type || null,
-        value: active.value,
-        selectionStart: active.selectionStart,
-        selectionEnd: active.selectionEnd,
-      }
-    : null;
-  return { drafts, focus };
-}
-
-function restoreFormDrafts(root, snapshot) {
-  if (!snapshot) return;
-  const { drafts, focus } = snapshot;
-  Object.entries(drafts || {}).forEach(([formId, fields]) => {
-    const form = root.querySelector(`#${CSS.escape(formId)}`);
-    if (!form) return;
-    Object.entries(fields).forEach(([name, value]) => {
-      const els = form.querySelectorAll(`[name="${CSS.escape(name)}"]`);
-      if (!els.length) return;
-      if (Array.isArray(value)) {
-        els.forEach((el) => {
-          if (el.type === "checkbox" || el.type === "radio") {
-            el.checked = value.includes(el.value);
-          }
-        });
-        return;
-      }
-      els.forEach((el) => {
-        if (el.type === "checkbox" || el.type === "radio") {
-          el.checked = el.value === value;
-        } else {
-          el.value = value;
-        }
-      });
-    });
-  });
-  if (focus?.formId && focus.name) {
-    const form = root.querySelector(`#${CSS.escape(focus.formId)}`);
-    const el = form?.querySelector(`[name="${CSS.escape(focus.name)}"]`);
-    if (el && el.type !== "file" && el.type !== "checkbox" && el.type !== "radio") {
-      el.focus();
-      if (typeof focus.selectionStart === "number" && typeof el.setSelectionRange === "function") {
-        try {
-          el.setSelectionRange(focus.selectionStart, focus.selectionEnd ?? focus.selectionStart);
-        } catch {
-          /* ignore unsupported input types */
-        }
-      }
-    }
-  }
-}
-
-function render() {
+function render(options = {}) {
   const root = document.getElementById("view");
-  const snapshot = captureFormDrafts(root);
+  // Keep live form values if the form is about to be rebuilt (nav switch).
+  syncCameraDraftFromForm(document.getElementById("add-camera-form"));
+
+  // Soft path: cameras form already mounted and this is a background refresh.
+  if (!options.force && state.view === "cameras" && document.getElementById("add-camera-form")) {
+    patchCamerasTable();
+    return;
+  }
+
   const map = {
     live: renderLive,
     cameras: renderCameras,
@@ -377,33 +412,10 @@ function render() {
     settings: renderSettings,
   };
   root.innerHTML = (map[state.view] || renderLive)();
-  restoreFormDrafts(root, snapshot);
   bindViewHandlers();
 }
 
-function bindViewHandlers() {
-  const addForm = document.getElementById("add-camera-form");
-  if (addForm) {
-    addForm.onsubmit = async (event) => {
-      event.preventDefault();
-      const fd = new FormData(addForm);
-      const modules = [...addForm.querySelectorAll('input[name="modules"]:checked')].map((el) => el.value);
-      const payload = {
-        name: fd.get("name"),
-        camera_id: fd.get("camera_id") || "",
-        rtsp_url: fd.get("rtsp_url"),
-        device: fd.get("device") || "",
-        stream_role: fd.get("stream_role") || "both",
-        detect_fps: Number(fd.get("detect_fps") || 0),
-        modules,
-        enabled: true,
-      };
-      await api("/api/cameras", { method: "POST", body: JSON.stringify(payload) });
-      await refresh();
-      setView("live");
-    };
-  }
-
+function bindCameraTableHandlers() {
   document.querySelectorAll("[data-del]").forEach((btn) => {
     btn.onclick = async () => {
       if (!confirm("Delete camera?")) return;
@@ -423,6 +435,37 @@ function bindViewHandlers() {
       await refresh();
     };
   });
+}
+
+function bindViewHandlers() {
+  const addForm = document.getElementById("add-camera-form");
+  if (addForm) {
+    const persist = () => syncCameraDraftFromForm(addForm);
+    addForm.addEventListener("input", persist);
+    addForm.addEventListener("change", persist);
+
+    addForm.onsubmit = async (event) => {
+      event.preventDefault();
+      syncCameraDraftFromForm(addForm);
+      const d = state.cameraDraft;
+      const payload = {
+        name: d.name,
+        camera_id: d.camera_id || "",
+        rtsp_url: d.rtsp_url,
+        device: d.device || "",
+        stream_role: d.stream_role || "both",
+        detect_fps: Number(d.detect_fps || 0),
+        modules: d.modules,
+        enabled: true,
+      };
+      await api("/api/cameras", { method: "POST", body: JSON.stringify(payload) });
+      resetCameraDraft();
+      await refresh();
+      setView("live");
+    };
+  }
+
+  bindCameraTableHandlers();
 
   const upload = document.getElementById("upload-model-form");
   if (upload) {

@@ -63,7 +63,11 @@ if ui_root.exists():
 
     @app.get("/app.js")
     def app_js():
-        return FileResponse(ui_root / "app.js", media_type="application/javascript")
+        return FileResponse(
+            ui_root / "app.js",
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
 
 
 def main():
