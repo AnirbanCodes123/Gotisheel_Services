@@ -44,6 +44,24 @@ def _sanitize_name(value: str) -> str:
     return cleaned or "camera"
 
 
+def _compose_camera_id(name: str, camera_id: str | None) -> str:
+    """Build upload mapping like ppe_bypass: name_siteId_cameraMongoId.
+
+    UI enters:
+      name = production-1
+      camera_id = 69e87590087d48327b46eb1e_6a38fee7833e5bacefa6e110
+    Stored / uploaded as:
+      production-1_69e87590087d48327b46eb1e_6a38fee7833e5bacefa6e110
+    """
+    name = (name or "").strip()
+    cid = (camera_id or "").strip()
+    if not cid:
+        return name
+    if cid == name or cid.startswith(f"{name}_"):
+        return cid
+    return f"{name}_{cid}"
+
+
 def _serialize(row: Camera) -> dict[str, Any]:
     worker = SHARDS.get_worker(row.name)
     live = worker.status() if worker else {}
@@ -76,9 +94,10 @@ def create_camera(payload: CameraIn, db: Session = Depends(get_session)):
     name = _sanitize_name(payload.name)
     if db.query(Camera).filter(Camera.name == name).first():
         raise HTTPException(400, f"Camera name already exists: {name}")
+    mapped_id = _compose_camera_id(name, payload.camera_id)
     row = Camera(
         name=name,
-        camera_id=payload.camera_id or name,
+        camera_id=mapped_id,
         rtsp_url=payload.rtsp_url.strip(),
         enabled=payload.enabled,
         device=payload.device,
@@ -110,6 +129,14 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
     data = payload.model_dump(exclude_unset=True)
     if "name" in data and data["name"]:
         data["name"] = _sanitize_name(data["name"])
+    # Recompose upload mapping whenever name and/or camera_id change
+    if "name" in data or "camera_id" in data:
+        next_name = data.get("name", row.name)
+        raw_id = data["camera_id"] if "camera_id" in data else row.camera_id
+        # If stored id already had name_ prefix and only name changed, strip old prefix first
+        if "camera_id" not in data and row.camera_id.startswith(f"{row.name}_"):
+            raw_id = row.camera_id[len(row.name) + 1 :]
+        data["camera_id"] = _compose_camera_id(next_name, raw_id)
     for key, value in data.items():
         setattr(row, key, value)
     db.commit()

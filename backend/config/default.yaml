@@ -48,16 +48,20 @@ modules:
     enabled: true
     model: "DS_PPE_6.pt"
     labels: ["nohairnet", "nomask"]
-    nohairnet_confidence: 0.45
-    nomask_confidence: 0.45
+    nohairnet_confidence: 0.78
+    nomask_confidence: 0.78
     cooldown_seconds: 45
+    iou_dedup_threshold: 0.25
+    center_dedup_distance_px: 280
+    area_ratio_dedup_threshold: 4.0
+    tracker: "bytetrack.yaml"
   frisking:
     enabled: true
     model: "yolo11l-pose.pt"
     person_model: "yolo11l.pt"
+    security_model: "security_7.pt"
     labels: ["frisking_missed"]
     confidence: 0.5
-    cooldown_seconds: 60
   crowd:
     enabled: true
     model: "yolo11s.pt"
@@ -77,13 +81,28 @@ modules:
     confidence: 0.35
     miss_gap_seconds: 180
     cooldown_seconds: 1800
+    tracker: "botsort.yaml"
+    track_lost_grace_seconds: 90
+    track_relink_iou: 0.15
+    track_relink_center_px: 280
+    track_bbox_smooth: 0.65
+    new_person_min_confidence: 0.45
+    new_person_confirm_frames: 5
+    slot_merge_iou: 0.40
+    slot_merge_center_px: 120
   sling:
     enabled: true
     model: "sling_4_11m_1500.pt"
-    labels: ["sling_psychrometer"]
-    confidence: 0.45
-    confirmation_count: 3
-    cooldown_seconds: 3600
+    labels: ["sling_psychrometer", "no_sling_motion"]
+    confidence: 0.55
+    confirmation_count: 2
+    confirmation_window_seconds: 120
+    confirmation_min_interval_seconds: 1.0
+    events_per_window: 1
+    window_start_minute: 40
+    window_end_minute: 20
+    sling_label: "sling_psychrometer"
+    no_sling_label: "no_sling_motion"
 
 ffmpeg:
   path: "ffmpeg"

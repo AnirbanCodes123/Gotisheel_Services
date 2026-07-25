@@ -254,9 +254,11 @@ function renderCameras() {
   const moduleChecks = state.modules
     .map((m) => {
       const checked = d.modules.includes(m.id) ? "checked" : "";
-      return `<label class="check"><input type="checkbox" name="modules" value="${esc(m.id)}" ${checked} ${
+      const loaded = m.loaded ? "loaded" : m.error ? "error" : "pending";
+      const tip = m.error ? `title="${esc(m.error)}"` : m.loaded ? 'title="model loaded"' : 'title="not loaded yet"';
+      return `<label class="check" ${tip}><input type="checkbox" name="modules" value="${esc(m.id)}" ${checked} ${
         m.enabled ? "" : "disabled"
-      } /> ${esc(m.id)}</label>`;
+      } /> ${esc(m.id)} <span class="muted">(${esc(loaded)})</span></label>`;
     })
     .join("");
 
@@ -287,13 +289,14 @@ function renderCameras() {
     <form class="form" id="add-camera-form" autocomplete="off">
       <h3 style="margin:0">Add Camera</h3>
       <div class="form-row two">
-        <div class="form-row"><label>Name</label><input name="name" required placeholder="gate-1" value="${esc(
+        <div class="form-row"><label>Name</label><input name="name" required placeholder="production-1" value="${esc(
           d.name
         )}" /></div>
-        <div class="form-row"><label>Camera ID</label><input name="camera_id" placeholder="optional external id" value="${esc(
+        <div class="form-row"><label>Camera ID</label><input name="camera_id" required placeholder="69e87590087d48327b46eb1e_6a38fee7833e5bacefa6e110" value="${esc(
           d.camera_id
-        )}" /></div>
+        )}" title="Stored/uploaded as name_id, e.g. production-1_69e8…_6a38…" /></div>
       </div>
+      <p class="muted" style="margin:0 0 10px">Upload mapping becomes <code>name_cameraId</code> (same as ppe_bypass), e.g. <code>production-1_69e87590087d48327b46eb1e_6a38fee7833e5bacefa6e110</code></p>
       <div class="form-row"><label>RTSP URL</label><input name="rtsp_url" required placeholder="rtsp://user:pass@host:554/stream" value="${esc(
         d.rtsp_url
       )}" /></div>

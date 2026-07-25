@@ -35,6 +35,62 @@ def _thumbnail(frame: np.ndarray, size: tuple[int, int], max_kb: int) -> Optiona
     return _compress_jpeg(thumb, max_kb)
 
 
+def _union_bbox(boxes: list) -> list[float]:
+    if not boxes:
+        return [0.0, 0.0, 0.0, 0.0]
+    xs1 = [float(b[0]) for b in boxes]
+    ys1 = [float(b[1]) for b in boxes]
+    xs2 = [float(b[2]) for b in boxes]
+    ys2 = [float(b[3]) for b in boxes]
+    return [min(xs1), min(ys1), max(xs2), max(ys2)]
+
+
+def _build_event_payload(camera_id: str, label: str, boxes: list, scores: list | None = None) -> dict[str, Any]:
+    """Frigate-compatible event body used by ppe_bypass upload_api."""
+    ts = time.time()
+    event_id = f"{label}-{camera_id}-{int(ts * 1000)}"
+    norm_boxes = [[float(v) for v in box] for box in boxes]
+    primary = _union_bbox(norm_boxes)
+    width = max(primary[2] - primary[0], 1.0)
+    height = max(primary[3] - primary[1], 1.0)
+    top_score = float(max(scores)) if scores else 1.0
+    state = {
+        "id": event_id,
+        "camera": camera_id,
+        "frame_time": ts,
+        "snapshot": {
+            "frame_time": ts,
+            "box": primary,
+            "area": width * height,
+            "region": [0, 0, 1280, 720],
+            "score": top_score,
+            "attributes": [],
+        },
+        "label": label,
+        "sub_label": None,
+        "top_score": top_score,
+        "false_positive": False,
+        "start_time": ts,
+        "end_time": ts + 10,
+        "score": top_score,
+        "box": primary,
+        "boxes": norm_boxes,
+        "area": width * height,
+        "ratio": round(width / height, 2),
+        "region": [0, 0, 1280, 720],
+        "stationary": False,
+        "motionless_count": 0,
+        "position_changes": 1,
+        "current_zones": [],
+        "entered_zones": [],
+        "has_clip": False,
+        "has_snapshot": True,
+        "attributes": {},
+        "current_attributes": [],
+    }
+    return {"before": {**state}, "after": {**state}, "type": "end"}
+
+
 class EventService:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -51,6 +107,9 @@ class EventService:
         webhook = config.get("webhook", {})
         events_dir = Path(config["paths"]["events_dir"])
         events_dir.mkdir(parents=True, exist_ok=True)
+
+        # Upload mapping must be the full ppe-style id (name_site_camera)
+        upload_camera_id = (camera_id or "").strip() or camera_name
 
         stamp = time.strftime("%Y%m%d_%H%M%S")
         base = f"{camera_name}_{detection.label}_{stamp}"
@@ -87,9 +146,10 @@ class EventService:
         if webhook.get("enabled") and image_bytes is not None:
             uploaded = self._post_webhook(
                 webhook,
-                camera_id=camera_id or camera_name,
+                camera_id=upload_camera_id,
                 label=detection.label,
                 boxes=detection.boxes,
+                scores=detection.scores,
                 image_bytes=image_bytes,
                 thumb_bytes=thumb_bytes,
             )
@@ -99,7 +159,7 @@ class EventService:
             row = Event(
                 camera_pk=camera_pk,
                 camera_name=camera_name,
-                camera_id=camera_id,
+                camera_id=upload_camera_id,
                 label=detection.label,
                 module_id=detection.module_id,
                 detail=detection.detail,
@@ -114,7 +174,7 @@ class EventService:
             payload = {
                 "id": row.id,
                 "camera_name": camera_name,
-                "camera_id": camera_id,
+                "camera_id": upload_camera_id,
                 "label": detection.label,
                 "module_id": detection.module_id,
                 "detail": detection.detail,
@@ -136,34 +196,36 @@ class EventService:
         camera_id: str,
         label: str,
         boxes: list,
+        scores: list,
         image_bytes: bytes,
         thumb_bytes: Optional[bytes],
     ) -> bool:
         url = f"{str(webhook.get('server_url', '')).rstrip('/')}{webhook.get('upload_endpoint', '')}"
         timeout = float(webhook.get("upload_timeout_seconds", 15))
-        event_json = json.dumps(
-            {
-                "camera_id": camera_id,
-                "label": label,
-                "bbox": boxes,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            }
-        )
+        event_payload = _build_event_payload(camera_id, label, boxes, scores)
+        primary = _union_bbox(boxes)
         files = {
             "image": ("event.jpg", image_bytes, "image/jpeg"),
         }
         if thumb_bytes:
-            files["thumbnail"] = ("thumb.jpg", thumb_bytes, "image/jpeg")
+            files["thumbnail"] = ("thumbnail.jpg", thumb_bytes, "image/jpeg")
         data = {
-            "event": event_json,
+            "event": json.dumps(event_payload),
             "label": label,
-            "bbox": json.dumps(boxes),
-            "camera_id": camera_id,
+            "bbox": json.dumps([float(v) for v in primary]),
         }
         try:
+            print(f"[webhook] REQUEST {label} camera={camera_id} url={url}")
             response = requests.post(url, files=files, data=data, timeout=timeout)
             if response.status_code == 200:
-                print(f"[webhook] OK {label} camera={camera_id}")
+                try:
+                    result = response.json()
+                except Exception:
+                    result = {}
+                if result.get("skipped"):
+                    print(f"[webhook] SKIPPED {label} camera={camera_id}: {result.get('message', '')}")
+                else:
+                    print(f"[webhook] OK {label} camera={camera_id}")
                 return True
             print(f"[webhook] FAIL HTTP {response.status_code}: {response.text[:200]}")
             return False

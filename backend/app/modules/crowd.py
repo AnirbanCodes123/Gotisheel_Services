@@ -1,4 +1,4 @@
-"""Crowd counting module."""
+"""Crowd counting module (ported from crowd_loitering_bypass/app.py)."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ class CrowdModule:
         self.model = None
         self.device = "cpu"
         self.config: dict[str, Any] = {}
-        self._last_event: dict[str, float] = {}
 
     def load(self, model_path: str, device: str, config: dict[str, Any]) -> None:
         from ultralytics import YOLO
@@ -50,14 +49,15 @@ class CrowdModule:
         return False
 
     def process(self, frame: np.ndarray, ctx: CameraContext) -> list[DetectionEvent]:
-        if self.model is None or self._quiet_hours():
+        if self.model is None:
             return []
+        # Still run inference for live person_count; suppress events in quiet hours.
         threshold = int(self.config.get("person_threshold", 15))
         conf = float(self.config.get("confidence", 0.4))
         cooldown = float(self.config.get("cooldown_seconds", 120))
         results = self.model.predict(frame, conf=conf, classes=[0], verbose=False, device=self.device)
-        boxes = []
-        scores = []
+        boxes: list[list[float]] = []
+        scores: list[float] = []
         for result in results:
             if result.boxes is None:
                 continue
@@ -66,13 +66,14 @@ class CrowdModule:
                 scores.append(float(score))
         count = len(boxes)
         ctx.state["person_count"] = count
-        if count < threshold:
+        if count < threshold or self._quiet_hours():
             return []
-        key = f"{ctx.key}:crowd"
+        state = ctx.state.setdefault("crowd", {"last_upload_at": 0.0})
         now = time.time()
-        if now - self._last_event.get(key, 0) < cooldown:
+        if now - float(state["last_upload_at"]) < cooldown:
             return []
-        self._last_event[key] = now
+        # Advance cooldown when event is emitted (upload success is handled by EventService).
+        state["last_upload_at"] = now
         return [
             DetectionEvent(
                 label="crowd",
