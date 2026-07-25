@@ -153,6 +153,10 @@ async function refresh() {
       patchCamerasTable();
       return;
     }
+    // Soft-update Live tiles so MJPEG keeps streaming while FPS refreshes.
+    if (state.view === "live" && document.querySelector("[data-cam-card]")) {
+      if (patchLiveCards()) return;
+    }
     if (isEditingForm()) {
       return;
     }
@@ -168,27 +172,76 @@ async function refresh() {
   }
 }
 
+function formatFps(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "0.0";
+  return n.toFixed(1);
+}
+
+function liveFpsLabel(cam) {
+  const cap = formatFps(cam.runtime?.capture_fps);
+  const det = formatFps(cam.runtime?.detect_fps);
+  return `FPS ${cap}<span class="muted-fps">det ${det}</span>`;
+}
+
+function patchLiveCards() {
+  const enabled = state.cameras.filter((c) => c.enabled);
+  const cards = [...document.querySelectorAll("[data-cam-card]")];
+  if (!cards.length) return false;
+  const names = new Set(enabled.map((c) => c.name));
+  // If camera set changed, do a full re-render.
+  if (cards.length !== enabled.length || cards.some((el) => !names.has(el.dataset.camCard))) {
+    return false;
+  }
+  enabled.forEach((cam) => {
+    const card = document.querySelector(`[data-cam-card="${CSS.escape(cam.name)}"]`);
+    if (!card) return;
+    const online = Boolean(cam.runtime?.online);
+    const badge = card.querySelector("[data-live-badge]");
+    if (badge) {
+      badge.className = `badge ${online ? "on" : "off"}`;
+      badge.textContent = online ? "LIVE" : "OFF";
+    }
+    const fps = card.querySelector("[data-live-fps]");
+    if (fps) fps.innerHTML = liveFpsLabel(cam);
+    const metaFps = card.querySelector("[data-meta-fps]");
+    if (metaFps) {
+      metaFps.textContent = `Current FPS ${formatFps(cam.runtime?.capture_fps)} · detect ${formatFps(
+        cam.runtime?.detect_fps
+      )}`;
+    }
+    const device = card.querySelector("[data-meta-device]");
+    if (device) device.textContent = `device ${cam.runtime?.device || cam.device || "global"}`;
+  });
+  return true;
+}
+
 function renderLive() {
   if (!state.cameras.length) {
     return `<div class="card" style="padding:20px"><div class="muted">No cameras yet. Add one under Cameras.</div></div>`;
   }
-  return `<div class="grid cams">${state.cameras
+  return `<div class="grid cams" id="live-grid">${state.cameras
     .filter((c) => c.enabled)
     .map((cam) => {
       const online = cam.runtime?.online;
       const src = `/api/streams/${encodeURIComponent(cam.name)}/mjpeg`;
-      return `<article class="card">
+      return `<article class="card" data-cam-card="${esc(cam.name)}">
         <div class="card-h">
           <div>
             <h3>${esc(cam.name)}</h3>
             <div class="muted">${esc((cam.modules || []).join(", ") || "no modules")}</div>
           </div>
-          <span class="badge ${online ? "on" : "off"}">${online ? "LIVE" : "OFF"}</span>
+          <span class="badge ${online ? "on" : "off"}" data-live-badge>${online ? "LIVE" : "OFF"}</span>
         </div>
-        <img class="feed" src="${src}" alt="${esc(cam.name)}" />
+        <div class="feed-wrap">
+          <div class="fps-pill" data-live-fps>${liveFpsLabel(cam)}</div>
+          <img class="feed" src="${src}" alt="${esc(cam.name)}" />
+        </div>
         <div class="meta">
-          <div>cap ${esc(cam.runtime?.capture_fps ?? 0)} · detect ${esc(cam.runtime?.detect_fps ?? 0)} FPS</div>
-          <div>device ${esc(cam.runtime?.device || cam.device || "global")}</div>
+          <div data-meta-fps>Current FPS ${formatFps(cam.runtime?.capture_fps)} · detect ${formatFps(
+            cam.runtime?.detect_fps
+          )}</div>
+          <div data-meta-device>device ${esc(cam.runtime?.device || cam.device || "global")}</div>
           <div><a href="/player.html?src=${encodeURIComponent(cam.name)}" target="_blank" rel="noreferrer">Open WebRTC</a></div>
         </div>
       </article>`;
@@ -400,6 +453,9 @@ function render(options = {}) {
   if (!options.force && state.view === "cameras" && document.getElementById("add-camera-form")) {
     patchCamerasTable();
     return;
+  }
+  if (!options.force && state.view === "live" && document.querySelector("[data-cam-card]")) {
+    if (patchLiveCards()) return;
   }
 
   const map = {

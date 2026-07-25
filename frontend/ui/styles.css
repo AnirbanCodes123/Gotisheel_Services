@@ -70,6 +70,15 @@ button, input, select, textarea { font: inherit; }
 .card-h h3 { margin: 0; font-size: 14px; }
 .muted { color: var(--muted); font-size: 12px; }
 .feed { width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #05080d; display: block; }
+.feed-wrap { position: relative; background: #05080d; }
+.fps-pill {
+  position: absolute; top: 10px; left: 10px; z-index: 2;
+  background: rgba(8, 12, 18, 0.82); border: 1px solid var(--line);
+  color: var(--accent); font-family: var(--mono); font-size: 12px; font-weight: 700;
+  border-radius: 999px; padding: 5px 10px; letter-spacing: 0.02em;
+  backdrop-filter: blur(6px);
+}
+.fps-pill .muted-fps { color: var(--muted); font-weight: 500; margin-left: 6px; }
 .meta { padding: 12px 14px; display: grid; gap: 6px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
 .form {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px;

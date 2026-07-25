@@ -43,6 +43,13 @@
       border-radius: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted);
     }
     .status.err { color: #ffb4b4; border-color: #5a2424; }
+    .fps-pill {
+      position: absolute; top: 16px; left: 16px; z-index: 2;
+      background: rgba(8, 12, 18, 0.82); border: 1px solid var(--line);
+      color: var(--accent); font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700;
+      border-radius: 999px; padding: 6px 12px;
+    }
+    .fps-pill span { color: var(--muted); font-weight: 500; margin-left: 8px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .btn {
       border: 1px solid var(--line); background: var(--accent); color: #041016;
@@ -67,6 +74,7 @@
     <main class="stage">
       <video id="video" autoplay playsinline muted controls></video>
       <img id="mjpeg" class="feed" alt="MJPEG fallback" hidden />
+      <div class="fps-pill" id="fps">FPS —</div>
       <div class="status" id="status">Starting…</div>
     </main>
   </div>
@@ -76,6 +84,7 @@
     const titleEl = document.getElementById("title");
     const subtitleEl = document.getElementById("subtitle");
     const statusEl = document.getElementById("status");
+    const fpsEl = document.getElementById("fps");
     const videoEl = document.getElementById("video");
     const mjpegEl = document.getElementById("mjpeg");
     const btnMjpeg = document.getElementById("btn-mjpeg");
@@ -83,6 +92,25 @@
     let pc = null;
     let ws = null;
     let usingMjpeg = false;
+
+    function formatFps(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) return "0.0";
+      return n.toFixed(1);
+    }
+
+    function updateFpsFromInfo(info) {
+      const rt = info?.runtime || {};
+      fpsEl.innerHTML = `FPS ${formatFps(rt.capture_fps)}<span>det ${formatFps(rt.detect_fps)}</span>`;
+    }
+
+    async function pollFps() {
+      if (!camera) return;
+      try {
+        const info = await loadInfo();
+        updateFpsFromInfo(info);
+      } catch (_) {}
+    }
 
     function setStatus(text, isErr = false) {
       statusEl.textContent = text;
@@ -226,6 +254,7 @@
       try {
         const info = await loadInfo();
         subtitleEl.textContent = info.online ? "Camera online" : "Camera offline / starting";
+        updateFpsFromInfo(info);
         // Ensure stream is registered with go2rtc before connecting.
         await fetch(`/api/streams/${encodeURIComponent(camera)}/ensure-webrtc`, { method: "POST" }).catch(() => null);
         const go2rtcUrl = info.go2rtc_api_url || "http://127.0.0.1:1984";
@@ -241,6 +270,7 @@
 
     btnMjpeg.addEventListener("click", () => showMjpeg("manual"));
     boot();
+    setInterval(pollFps, 2000);
   </script>
 </body>
 </html>
