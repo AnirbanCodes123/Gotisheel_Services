@@ -30,7 +30,7 @@ chmod +x scripts/start_all.sh
 
 Open **http://localhost:9100**
 
-Optional WebRTC: install [go2rtc](https://github.com/AlexxIT/go2rtc/releases) so `go2rtc` is on `PATH`.
+WebRTC: `./scripts/start_all.sh` auto-downloads [go2rtc](https://github.com/AlexxIT/go2rtc/releases) into `bin/go2rtc` if missing. Skip with `GOTISHEEL_SKIP_GO2RTC=1`.
 
 ### Import existing camera lists
 

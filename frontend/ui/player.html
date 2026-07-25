@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gotisheel Live Player</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #121821;
+      --line: #243041;
+      --text: #e8eef6;
+      --muted: #8b9bb0;
+      --accent: #3dd6c6;
+      --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      background: var(--bg); color: var(--text);
+      font-family: "DM Sans", system-ui, sans-serif;
+    }
+    .shell { display: flex; flex-direction: column; height: 100%; }
+    .bar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+    }
+    .bar h1 { margin: 0; font-size: 16px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .stage {
+      flex: 1; display: grid; place-items: center; background: #05080d; min-height: 0;
+      position: relative;
+    }
+    video, img.feed {
+      width: 100%; height: 100%; object-fit: contain; background: #05080d; display: block;
+    }
+    .status {
+      position: absolute; left: 16px; bottom: 16px;
+      background: rgba(12, 18, 26, 0.85); border: 1px solid var(--line);
+      border-radius: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted);
+    }
+    .status.err { color: #ffb4b4; border-color: #5a2424; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      border: 1px solid var(--line); background: var(--accent); color: #041016;
+      border-radius: 10px; padding: 8px 12px; font-weight: 700; cursor: pointer; text-decoration: none;
+      font-size: 13px;
+    }
+    .btn.ghost { background: transparent; color: var(--text); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="bar">
+      <div>
+        <h1 id="title">Live player</h1>
+        <div class="muted" id="subtitle">Connecting…</div>
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="btn-mjpeg" type="button">Force MJPEG</button>
+        <a class="btn ghost" id="btn-back" href="/">Back</a>
+      </div>
+    </header>
+    <main class="stage">
+      <video id="video" autoplay playsinline muted controls></video>
+      <img id="mjpeg" class="feed" alt="MJPEG fallback" hidden />
+      <div class="status" id="status">Starting…</div>
+    </main>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const camera = params.get("src") || params.get("camera") || "";
+    const titleEl = document.getElementById("title");
+    const subtitleEl = document.getElementById("subtitle");
+    const statusEl = document.getElementById("status");
+    const videoEl = document.getElementById("video");
+    const mjpegEl = document.getElementById("mjpeg");
+    const btnMjpeg = document.getElementById("btn-mjpeg");
+
+    let pc = null;
+    let ws = null;
+    let usingMjpeg = false;
+
+    function setStatus(text, isErr = false) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle("err", isErr);
+    }
+
+    function showMjpeg(reason) {
+      usingMjpeg = true;
+      cleanupRtc();
+      videoEl.hidden = true;
+      videoEl.srcObject = null;
+      mjpegEl.hidden = false;
+      mjpegEl.src = `/api/streams/${encodeURIComponent(camera)}/mjpeg`;
+      setStatus(`MJPEG fallback${reason ? ` — ${reason}` : ""}`);
+      subtitleEl.textContent = "Mode: MJPEG (Gotisheel)";
+    }
+
+    function cleanupRtc() {
+      if (ws) {
+        try { ws.close(); } catch (_) {}
+        ws = null;
+      }
+      if (pc) {
+        try { pc.close(); } catch (_) {}
+        pc = null;
+      }
+    }
+
+    async function loadInfo() {
+      const res = await fetch(`/api/streams/${encodeURIComponent(camera)}/info`);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function go2rtcWsUrl(apiUrl) {
+      const base = (apiUrl || "http://127.0.0.1:1984").replace(/\/$/, "");
+      const wsBase = base.replace(/^http/, "ws");
+      return `${wsBase}/api/ws?src=${encodeURIComponent(camera)}`;
+    }
+
+    async function startWebRtc(apiUrl) {
+      cleanupRtc();
+      videoEl.hidden = false;
+      mjpegEl.hidden = true;
+      mjpegEl.removeAttribute("src");
+      usingMjpeg = false;
+
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] }],
+      });
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.addTransceiver("audio", { direction: "recvonly" });
+
+      pc.addEventListener("track", (ev) => {
+        if (ev.streams && ev.streams[0]) {
+          videoEl.srcObject = ev.streams[0];
+        } else {
+          videoEl.srcObject = new MediaStream([ev.track]);
+        }
+        videoEl.play().catch(() => {
+          videoEl.muted = true;
+          videoEl.play().catch(() => {});
+        });
+        setStatus("WebRTC connected");
+        subtitleEl.textContent = "Mode: WebRTC (go2rtc)";
+      });
+
+      pc.addEventListener("connectionstatechange", () => {
+        if (!pc) return;
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          showMjpeg(`WebRTC ${pc.connectionState}`);
+        }
+      });
+
+      const url = go2rtcWsUrl(apiUrl);
+      setStatus(`Connecting WebRTC…`);
+      ws = new WebSocket(url);
+
+      const failTimer = setTimeout(() => {
+        if (!usingMjpeg && (!videoEl.srcObject || videoEl.readyState < 2)) {
+          showMjpeg("WebRTC timeout");
+        }
+      }, 8000);
+
+      ws.addEventListener("open", async () => {
+        pc.addEventListener("icecandidate", (ev) => {
+          if (!ev.candidate || !ws || ws.readyState !== WebSocket.OPEN) return;
+          ws.send(JSON.stringify({ type: "webrtc/candidate", value: ev.candidate.candidate }));
+        });
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          ws.send(JSON.stringify({ type: "webrtc/offer", value: offer.sdp }));
+        } catch (err) {
+          clearTimeout(failTimer);
+          showMjpeg(err.message || "offer failed");
+        }
+      });
+
+      ws.addEventListener("message", async (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        if (msg.type === "webrtc/candidate" && msg.value) {
+          try {
+            await pc.addIceCandidate({ candidate: msg.value, sdpMid: "0" });
+          } catch (_) {}
+        } else if (msg.type === "webrtc/answer" && msg.value) {
+          try {
+            await pc.setRemoteDescription({ type: "answer", sdp: msg.value });
+            clearTimeout(failTimer);
+          } catch (err) {
+            clearTimeout(failTimer);
+            showMjpeg(err.message || "answer failed");
+          }
+        } else if (msg.type === "error") {
+          clearTimeout(failTimer);
+          showMjpeg(msg.value || "go2rtc error");
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        if (!usingMjpeg && (!videoEl.srcObject || videoEl.readyState < 2)) {
+          clearTimeout(failTimer);
+          showMjpeg("go2rtc websocket closed");
+        }
+      });
+
+      ws.addEventListener("error", () => {
+        clearTimeout(failTimer);
+        showMjpeg("go2rtc unavailable");
+      });
+    }
+
+    async function boot() {
+      if (!camera) {
+        titleEl.textContent = "No camera";
+        setStatus("Missing ?src=camera_name", true);
+        return;
+      }
+      titleEl.textContent = camera;
+      try {
+        const info = await loadInfo();
+        subtitleEl.textContent = info.online ? "Camera online" : "Camera offline / starting";
+        // Ensure stream is registered with go2rtc before connecting.
+        await fetch(`/api/streams/${encodeURIComponent(camera)}/ensure-webrtc`, { method: "POST" }).catch(() => null);
+        const go2rtcUrl = info.go2rtc_api_url || "http://127.0.0.1:1984";
+        if (info.go2rtc_ok === false) {
+          showMjpeg("go2rtc offline");
+          return;
+        }
+        await startWebRtc(go2rtcUrl);
+      } catch (err) {
+        showMjpeg(err.message || "failed to load stream info");
+      }
+    }
+
+    btnMjpeg.addEventListener("click", () => showMjpeg("manual"));
+    boot();
+  </script>
+</body>
+</html>

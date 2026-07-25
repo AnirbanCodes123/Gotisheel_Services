@@ -85,6 +85,8 @@ pnpm-debug.log*
 # go2rtc / streaming caches
 go2rtc/*.log
 go2rtc/cache/
+bin/go2rtc
+bin/go2rtc_*
 *.log
 
 # OS / editor

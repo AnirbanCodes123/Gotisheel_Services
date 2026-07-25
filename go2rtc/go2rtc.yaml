@@ -4,6 +4,9 @@ api:
 
 webrtc:
   listen: ":8555"
+  candidates:
+    - 127.0.0.1
+    - stun:stun.l.google.com:19302
 
 rtsp:
   listen: ":8554"

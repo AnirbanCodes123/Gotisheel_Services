@@ -69,6 +69,14 @@ if ui_root.exists():
             headers={"Cache-Control": "no-store, max-age=0"},
         )
 
+    @app.get("/player.html")
+    def player():
+        return FileResponse(
+            ui_root / "player.html",
+            media_type="text/html",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+
 
 def main():
     import uvicorn

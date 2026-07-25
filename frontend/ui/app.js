@@ -189,7 +189,7 @@ function renderLive() {
         <div class="meta">
           <div>cap ${esc(cam.runtime?.capture_fps ?? 0)} · detect ${esc(cam.runtime?.detect_fps ?? 0)} FPS</div>
           <div>device ${esc(cam.runtime?.device || cam.device || "global")}</div>
-          <div><a href="${esc(cam.webrtc_url)}" target="_blank" rel="noreferrer">Open WebRTC</a></div>
+          <div><a href="/player.html?src=${encodeURIComponent(cam.name)}" target="_blank" rel="noreferrer">Open WebRTC</a></div>
         </div>
       </article>`;
     })

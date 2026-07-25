@@ -7,33 +7,58 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, StreamingResponse
 
+from ..core.db import Camera, session_factory
 from ..engine.shard_manager import SHARDS
 
 router = APIRouter(tags=["streams"])
+
+
+def _stream_payload(camera_name: str, online: bool, runtime: dict | None = None) -> dict:
+    health = SHARDS.go2rtc.health()
+    payload = {
+        "camera": camera_name,
+        "online": online,
+        "webrtc_url": SHARDS.go2rtc.stream_webrtc_url(camera_name),
+        "go2rtc_webrtc_url": SHARDS.go2rtc.stream_go2rtc_webrtc_url(camera_name),
+        "mse_url": SHARDS.go2rtc.stream_mse_url(camera_name),
+        "mjpeg_url": f"/api/streams/{camera_name}/mjpeg",
+        "snapshot_url": f"/api/streams/{camera_name}/snapshot.jpg",
+        "go2rtc_api_url": SHARDS.go2rtc.api_url,
+        "go2rtc_ok": bool(health.get("ok")),
+        "go2rtc": health,
+    }
+    if runtime is not None:
+        payload["runtime"] = runtime
+    return payload
 
 
 @router.get("/api/streams/{camera_name}/info")
 def stream_info(camera_name: str):
     worker = SHARDS.get_worker(camera_name)
     if worker is None:
-        # still return go2rtc URLs for cameras not yet online
-        return {
-            "camera": camera_name,
-            "online": False,
-            "webrtc_url": SHARDS.go2rtc.stream_webrtc_url(camera_name),
-            "mse_url": SHARDS.go2rtc.stream_mse_url(camera_name),
-            "mjpeg_url": f"/api/streams/{camera_name}/mjpeg",
-            "snapshot_url": f"/api/streams/{camera_name}/snapshot.jpg",
-        }
+        return _stream_payload(camera_name, online=False)
     status = worker.status()
+    return _stream_payload(camera_name, online=bool(status.get("online")), runtime=status)
+
+
+@router.post("/api/streams/{camera_name}/ensure-webrtc")
+def ensure_webrtc(camera_name: str):
+    """Register camera RTSP with go2rtc so the in-app player can connect."""
+    session = session_factory()
+    try:
+        row = session.query(Camera).filter(Camera.name == camera_name).one_or_none()
+        if row is None:
+            raise HTTPException(404, "Camera not found")
+        result = SHARDS.go2rtc.ensure_stream(row.name, row.rtsp_url)
+    finally:
+        session.close()
+    health = SHARDS.go2rtc.health()
     return {
         "camera": camera_name,
-        "online": status.get("online"),
+        "register": result,
+        "go2rtc_ok": bool(health.get("ok")),
         "webrtc_url": SHARDS.go2rtc.stream_webrtc_url(camera_name),
-        "mse_url": SHARDS.go2rtc.stream_mse_url(camera_name),
-        "mjpeg_url": f"/api/streams/{camera_name}/mjpeg",
-        "snapshot_url": f"/api/streams/{camera_name}/snapshot.jpg",
-        "runtime": status,
+        "go2rtc_webrtc_url": SHARDS.go2rtc.stream_go2rtc_webrtc_url(camera_name),
     }
 
 

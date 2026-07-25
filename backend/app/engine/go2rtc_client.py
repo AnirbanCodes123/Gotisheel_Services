@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import requests
 import yaml
@@ -26,19 +27,37 @@ class Go2rtcClient:
         except requests.RequestException as exc:
             return {"enabled": True, "ok": False, "detail": str(exc)}
 
+    def player_url(self, stream_name: str) -> str:
+        """In-app player (reliable). Opens on Gotisheel, not blank go2rtc stream.html."""
+        return f"/player.html?src={quote(stream_name, safe='')}"
+
     def stream_webrtc_url(self, stream_name: str) -> str:
-        # go2rtc webRTC page / WHEP-style links used by UI
-        return f"{self.api_url}/stream.html?src={stream_name}"
+        # Prefer Gotisheel player; keep direct go2rtc link as secondary.
+        return self.player_url(stream_name)
+
+    def stream_go2rtc_webrtc_url(self, stream_name: str) -> str:
+        return f"{self.api_url}/webrtc.html?src={quote(stream_name, safe='')}&media=video"
 
     def stream_mse_url(self, stream_name: str) -> str:
-        return f"{self.api_url}/api/stream.mp4?src={stream_name}"
+        return f"{self.api_url}/api/stream.mp4?src={quote(stream_name, safe='')}"
+
+    def has_stream(self, stream_name: str) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            response = requests.get(f"{self.api_url}/api/streams", timeout=2)
+            if not response.ok:
+                return False
+            data = response.json()
+            return stream_name in (data or {})
+        except requests.RequestException:
+            return False
 
     def register_rtsp(self, stream_name: str, rtsp_url: str) -> dict[str, Any]:
         """Register/update a stream. Tries API put; also writes yaml for persistence."""
         if not self.enabled:
             return {"ok": False, "detail": "go2rtc disabled"}
 
-        payload = {stream_name: rtsp_url}
         api_ok = False
         api_detail = ""
         try:
@@ -46,15 +65,34 @@ class Go2rtcClient:
             response = requests.put(
                 f"{self.api_url}/api/streams",
                 params={"name": stream_name, "src": rtsp_url},
-                timeout=3,
+                timeout=5,
             )
             api_ok = response.ok
             api_detail = response.text[:200]
+            # Some builds accept POST with JSON body
+            if not api_ok:
+                response = requests.put(
+                    f"{self.api_url}/api/streams",
+                    params={"src": f"{stream_name}:{rtsp_url}"},
+                    timeout=5,
+                )
+                api_ok = response.ok
+                api_detail = response.text[:200] or api_detail
         except requests.RequestException as exc:
             api_detail = str(exc)
 
         self._upsert_yaml(stream_name, rtsp_url)
-        return {"ok": api_ok, "detail": api_detail, "webrtc_url": self.stream_webrtc_url(stream_name)}
+        return {
+            "ok": api_ok,
+            "detail": api_detail,
+            "webrtc_url": self.stream_webrtc_url(stream_name),
+            "go2rtc_webrtc_url": self.stream_go2rtc_webrtc_url(stream_name),
+        }
+
+    def ensure_stream(self, stream_name: str, rtsp_url: str) -> dict[str, Any]:
+        if self.has_stream(stream_name):
+            return {"ok": True, "detail": "already registered", "webrtc_url": self.stream_webrtc_url(stream_name)}
+        return self.register_rtsp(stream_name, rtsp_url)
 
     def unregister(self, stream_name: str) -> None:
         try:
@@ -80,8 +118,14 @@ class Go2rtcClient:
     def _upsert_yaml(self, stream_name: str, rtsp_url: str) -> None:
         data = self._load_yaml()
         data.setdefault("streams", {})[stream_name] = rtsp_url
-        # Ensure api listen present
         data.setdefault("api", {}).setdefault("listen", ":1984")
+        webrtc = data.setdefault("webrtc", {})
+        webrtc.setdefault("listen", ":8555")
+        # Help browsers on the same host connect ICE candidates.
+        candidates = webrtc.setdefault("candidates", [])
+        for candidate in ("127.0.0.1", "stun:stun.l.google.com:19302"):
+            if candidate not in candidates:
+                candidates.append(candidate)
         self._save_yaml(data)
 
     def _remove_yaml(self, stream_name: str) -> None:
