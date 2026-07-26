@@ -10,6 +10,7 @@ from typing import Any, Optional
 import numpy as np
 
 from .base import CameraContext, DetectionEvent
+from .overlay import append_overlays
 
 
 class ConfirmationTracker:
@@ -137,6 +138,15 @@ class SlingModule:
             for box, score in zip(result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()):
                 boxes.append([float(v) for v in box])
                 scores.append(float(score))
+
+        if boxes:
+            append_overlays(
+                ctx.state,
+                [
+                    {"label": "sling", "box": b, "score": s, "color": (0, 220, 0)}
+                    for b, s in zip(boxes, scores)
+                ],
+            )
 
         if not boxes or not active:
             ctx.state["sling_pending"] = tracker.pending_count

@@ -10,6 +10,7 @@ from typing import Any, Optional
 import numpy as np
 
 from .base import CameraContext, DetectionEvent
+from .overlay import append_overlays
 from .paths import resolve_model_path
 
 # Vendored copy ships with Gotisheel so servers don't need a sibling frisking_bypass/
@@ -192,6 +193,34 @@ class FriskingModule:
             return []
 
         events: list[DetectionEvent] = []
+        live = []
+        # Draw currently tracked people when possible
+        try:
+            tracks = getattr(detector, "person_tracks", {}) or {}
+            frame_count = getattr(detector, "frame_count", 0)
+            for pid, track in tracks.items():
+                bbox = None
+                if hasattr(detector, "latest_track_bbox"):
+                    bbox = detector.latest_track_bbox(track)
+                if not bbox:
+                    continue
+                if hasattr(detector, "bbox_xywh_to_xyxy"):
+                    box = [float(v) for v in detector.bbox_xywh_to_xyxy(bbox)]
+                else:
+                    box = [float(v) for v in bbox]
+                label = "person"
+                color = (255, 180, 0)
+                if pid in getattr(detector, "security_people", set()):
+                    label, color = "security", (0, 255, 0)
+                elif pid in getattr(detector, "frisked_people", set()):
+                    label, color = "frisked", (0, 220, 0)
+                elif pid in getattr(detector, "missed_frisking_people", set()):
+                    label, color = "frisking_missed", (0, 0, 255)
+                live.append({"label": f"{label}:{pid}", "box": box, "score": 1.0, "color": color})
+            _ = frame_count
+        except Exception:
+            pass
+
         for event in missed_events or []:
             bbox = event.get("bbox_xyxy") or event.get("bbox")
             if not bbox:
@@ -203,6 +232,7 @@ class FriskingModule:
             else:
                 box = [float(v) for v in bbox]
 
+            live.append({"label": "frisking_missed", "box": box, "score": 1.0})
             event_frame = event.get("event_frame")
             events.append(
                 DetectionEvent(
@@ -218,4 +248,5 @@ class FriskingModule:
                     frame=event_frame.copy() if event_frame is not None else frame.copy(),
                 )
             )
+        append_overlays(ctx.state, live)
         return events

@@ -67,7 +67,8 @@
         <div class="muted" id="subtitle">Connecting…</div>
       </div>
       <div class="actions">
-        <button class="btn ghost" id="btn-mjpeg" type="button">Force MJPEG</button>
+        <button class="btn ghost" id="btn-mjpeg" type="button">Live + bbox (MJPEG)</button>
+        <button class="btn ghost" id="btn-webrtc" type="button">WebRTC (raw)</button>
         <a class="btn ghost" id="btn-back" href="/">Back</a>
       </div>
     </header>
@@ -81,6 +82,8 @@
   <script>
     const params = new URLSearchParams(location.search);
     const camera = params.get("src") || params.get("camera") || "";
+    // detect/bbox mode uses annotated MJPEG; webrtc is raw RTSP via go2rtc
+    const preferDetect = (params.get("mode") || "detect") !== "webrtc";
     const titleEl = document.getElementById("title");
     const subtitleEl = document.getElementById("subtitle");
     const statusEl = document.getElementById("status");
@@ -88,6 +91,7 @@
     const videoEl = document.getElementById("video");
     const mjpegEl = document.getElementById("mjpeg");
     const btnMjpeg = document.getElementById("btn-mjpeg");
+    const btnWebrtc = document.getElementById("btn-webrtc");
 
     let pc = null;
     let ws = null;
@@ -124,8 +128,8 @@
       videoEl.srcObject = null;
       mjpegEl.hidden = false;
       mjpegEl.src = `/api/streams/${encodeURIComponent(camera)}/mjpeg`;
-      setStatus(`MJPEG fallback${reason ? ` — ${reason}` : ""}`);
-      subtitleEl.textContent = "Mode: MJPEG (Gotisheel)";
+      setStatus(`Live detections (bbox)${reason ? ` — ${reason}` : ""}`);
+      subtitleEl.textContent = "Mode: MJPEG with detection boxes";
     }
 
     function cleanupRtc() {
@@ -253,9 +257,13 @@
       titleEl.textContent = camera;
       try {
         const info = await loadInfo();
-        subtitleEl.textContent = info.online ? "Camera online" : "Camera offline / starting";
         updateFpsFromInfo(info);
-        // Ensure stream is registered with go2rtc before connecting.
+        if (preferDetect) {
+          // Annotated stream includes live detection boxes (ppe2-style)
+          showMjpeg(info.online ? "online" : "starting");
+          return;
+        }
+        subtitleEl.textContent = info.online ? "Camera online" : "Camera offline / starting";
         await fetch(`/api/streams/${encodeURIComponent(camera)}/ensure-webrtc`, { method: "POST" }).catch(() => null);
         const go2rtcUrl = info.go2rtc_api_url || "http://127.0.0.1:1984";
         if (info.go2rtc_ok === false) {
@@ -269,6 +277,15 @@
     }
 
     btnMjpeg.addEventListener("click", () => showMjpeg("manual"));
+    btnWebrtc.addEventListener("click", async () => {
+      try {
+        const info = await loadInfo();
+        await fetch(`/api/streams/${encodeURIComponent(camera)}/ensure-webrtc`, { method: "POST" }).catch(() => null);
+        await startWebRtc(info.go2rtc_api_url || "http://127.0.0.1:1984");
+      } catch (err) {
+        showMjpeg(err.message || "webrtc failed");
+      }
+    });
     boot();
     setInterval(pollFps, 2000);
   </script>

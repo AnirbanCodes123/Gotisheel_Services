@@ -108,7 +108,7 @@ function cameraRowsHtml() {
       return `<tr>
         <td><strong>${esc(cam.name)}</strong><div class="muted">${esc(cam.camera_id)}</div></td>
         <td class="muted" style="max-width:240px;overflow:hidden;text-overflow:ellipsis">${esc(cam.rtsp_url)}</td>
-        <td>${esc((cam.modules || []).join(", ") || "—")}</td>
+        <td>${esc((cam.display_modules || cam.modules || []).join(", ") || "—")}</td>
         <td>${esc(cam.device || "global")}</td>
         <td><span class="badge ${cam.enabled ? "on" : "off"}">${cam.enabled ? "on" : "off"}</span></td>
         <td>
@@ -229,7 +229,7 @@ function renderLive() {
         <div class="card-h">
           <div>
             <h3>${esc(cam.name)}</h3>
-            <div class="muted">${esc((cam.modules || []).join(", ") || "no modules")}</div>
+            <div class="muted">${esc((cam.display_modules || cam.modules || []).join(", ") || "no modules")}</div>
           </div>
           <span class="badge ${online ? "on" : "off"}" data-live-badge>${online ? "LIVE" : "OFF"}</span>
         </div>
@@ -242,7 +242,7 @@ function renderLive() {
             cam.runtime?.detect_fps
           )}</div>
           <div data-meta-device>device ${esc(cam.runtime?.device || cam.device || "global")}</div>
-          <div><a href="/player.html?src=${encodeURIComponent(cam.name)}" target="_blank" rel="noreferrer">Open WebRTC</a></div>
+          <div><a href="/player.html?src=${encodeURIComponent(cam.name)}&mode=detect" target="_blank" rel="noreferrer">Open live (bbox)</a></div>
         </div>
       </article>`;
     })
@@ -251,14 +251,19 @@ function renderLive() {
 
 function renderCameras() {
   const d = state.cameraDraft;
+  // PPE shows as nomask/nohairnet (ppe2 labels), not a single "ppe" checkbox
   const moduleChecks = state.modules
-    .map((m) => {
-      const checked = d.modules.includes(m.id) ? "checked" : "";
+    .flatMap((m) => {
+      const opts = m.options && m.options.length ? m.options : [{ id: m.id, label: m.id, module_id: m.id }];
       const loaded = m.loaded ? "loaded" : m.error ? "error" : "pending";
       const tip = m.error ? `title="${esc(m.error)}"` : m.loaded ? 'title="model loaded"' : 'title="not loaded yet"';
-      return `<label class="check" ${tip}><input type="checkbox" name="modules" value="${esc(m.id)}" ${checked} ${
-        m.enabled ? "" : "disabled"
-      } /> ${esc(m.id)} <span class="muted">(${esc(loaded)})</span></label>`;
+      return opts.map((opt) => {
+        const selected = (d.modules || []).includes(opt.id) || (d.modules || []).includes(m.id);
+        const checked = selected ? "checked" : "";
+        return `<label class="check" ${tip}><input type="checkbox" name="modules" value="${esc(opt.id)}" ${checked} ${
+          m.enabled ? "" : "disabled"
+        } /> ${esc(opt.label)} <span class="muted">(${esc(loaded)})</span></label>`;
+      });
     })
     .join("");
 

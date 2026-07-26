@@ -33,12 +33,19 @@ class ModuleRegistry:
         rows = []
         for module_id, cls in MODULE_TYPES.items():
             mod_cfg = config.get(module_id, {})
+            labels = list(getattr(cls, "labels", mod_cfg.get("labels", [])))
+            # Camera UI options: expand PPE into nomask/nohairnet (ppe2 labels)
+            if module_id == "ppe":
+                options = [{"id": label, "label": label, "module_id": "ppe"} for label in labels]
+            else:
+                options = [{"id": module_id, "label": module_id, "module_id": module_id}]
             rows.append(
                 {
                     "id": module_id,
                     "enabled": bool(mod_cfg.get("enabled", True)),
                     "loaded": module_id in self.modules,
-                    "labels": list(getattr(cls, "labels", mod_cfg.get("labels", []))),
+                    "labels": labels,
+                    "options": options,
                     "model": mod_cfg.get("model"),
                     "error": self.load_errors.get(module_id),
                     "config": mod_cfg,
@@ -102,8 +109,27 @@ class ModuleRegistry:
         return self.modules.get(module_id)
 
     def process_frame(self, frame, ctx, module_ids: list[str]):
+        # Fresh overlays each inference tick (modules append live boxes)
+        ctx.state["overlays"] = []
         events = []
-        for module_id in module_ids:
+        # Normalize UI labels → engine module ids (nomask/nohairnet → ppe)
+        normalized: list[str] = []
+        ppe_labels: list[str] = []
+        for mid in module_ids or []:
+            key = str(mid).strip().lower()
+            if key in ("nomask", "nohairnet"):
+                if "ppe" not in normalized:
+                    normalized.append("ppe")
+                ppe_labels.append(key)
+            elif key and key not in normalized:
+                normalized.append(key)
+        if ppe_labels:
+            extra = dict(ctx.state.get("extra") or {})
+            # Prefer explicit camera extra; else use checkbox selection
+            if not extra.get("ppe_labels"):
+                extra["ppe_labels"] = ppe_labels
+                ctx.state["extra"] = extra
+        for module_id in normalized:
             module = self.modules.get(module_id)
             if module is None:
                 continue

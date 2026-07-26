@@ -12,8 +12,8 @@ import numpy as np
 from ..core.config import get_config
 from ..engine.ffmpeg_cuda import create_capture
 from ..engine.infer_scheduler import InferJob, SCHEDULER
-from ..modules import REGISTRY
 from ..modules.base import CameraContext, DetectionEvent
+from ..modules.overlay import draw_overlays
 
 
 class CameraWorker:
@@ -42,9 +42,13 @@ class CameraWorker:
         )
         self.ctx.state["extra"] = dict(camera_row.get("extra") or {})
         self.ctx.state["frisking_armed"] = bool((camera_row.get("extra") or {}).get("frisking_armed"))
+        self.ctx.state["overlays"] = []
         self._detect_counter = 0
         self._detect_t0 = time.time()
         self._lock = threading.Lock()
+        self._overlay_lock = threading.Lock()
+        self._latest_overlays: list[dict[str, Any]] = []
+        self._overlays_expire_at = 0.0
 
     def start(self) -> None:
         if self._running:
@@ -79,6 +83,7 @@ class CameraWorker:
                 "person_count": self.ctx.state.get("person_count"),
                 "active_tracks": self.ctx.state.get("active_tracks"),
                 "sling_pending": self.ctx.state.get("sling_pending"),
+                "overlay_count": len(self._latest_overlays),
             },
         }
 
@@ -88,7 +93,11 @@ class CameraWorker:
 
     def _encode(self, frame: np.ndarray) -> None:
         quality = int(get_config().get("detect", {}).get("jpeg_quality", 80))
-        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        # Draw last inference overlays onto live preview (ppe2-style)
+        with self._overlay_lock:
+            overlays = list(self._latest_overlays) if time.time() <= self._overlays_expire_at else []
+        annotated = draw_overlays(frame, overlays)
+        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if ok:
             with self._lock:
                 self.latest_jpeg = buf.tobytes()
@@ -100,6 +109,12 @@ class CameraWorker:
             self.detect_fps = self._detect_counter / elapsed
             self._detect_counter = 0
             self._detect_t0 = time.time()
+        # Capture overlays produced during this inference tick
+        overlays = list(self.ctx.state.get("overlays") or [])
+        with self._overlay_lock:
+            self._latest_overlays = overlays
+            # Keep boxes visible briefly between detect ticks
+            self._overlays_expire_at = time.time() + 1.5
         if events and self.on_events:
             self.on_events(self.camera, events)
 

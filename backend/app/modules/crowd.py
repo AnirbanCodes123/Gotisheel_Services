@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from .base import CameraContext, DetectionEvent
+from .overlay import append_overlays
 
 
 def _parse_hhmm(value: str) -> dt_time:
@@ -66,6 +67,10 @@ class CrowdModule:
                 scores.append(float(score))
         count = len(boxes)
         ctx.state["person_count"] = count
+        append_overlays(
+            ctx.state,
+            [{"label": "person", "box": b, "score": s, "color": (80, 80, 255)} for b, s in zip(boxes, scores)],
+        )
         if count < threshold or self._quiet_hours():
             return []
         state = ctx.state.setdefault("crowd", {"last_upload_at": 0.0})

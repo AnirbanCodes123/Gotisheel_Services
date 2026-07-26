@@ -62,6 +62,41 @@ def _compose_camera_id(name: str, camera_id: str | None) -> str:
     return f"{name}_{cid}"
 
 
+def _normalize_modules(modules: list[str] | None, extra: dict[str, Any] | None) -> tuple[list[str], dict[str, Any]]:
+    """Map UI labels (nomask/nohairnet) → engine module id `ppe` + extra.ppe_labels."""
+    extra = dict(extra or {})
+    normalized: list[str] = []
+    ppe_labels: list[str] = []
+    for mid in modules or []:
+        key = str(mid).strip().lower()
+        if key in ("nomask", "nohairnet"):
+            if "ppe" not in normalized:
+                normalized.append("ppe")
+            ppe_labels.append(key)
+        elif key == "ppe":
+            if "ppe" not in normalized:
+                normalized.append("ppe")
+        elif key and key not in normalized:
+            normalized.append(key)
+    if ppe_labels:
+        extra["ppe_labels"] = ppe_labels
+    elif "ppe" in normalized and not extra.get("ppe_labels"):
+        extra["ppe_labels"] = ["nohairnet", "nomask"]
+    return normalized, extra
+
+
+def _display_modules(row: Camera) -> list[str]:
+    """Show PPE as nomask/nohairnet labels (ppe2 style) in UI lists."""
+    modules = list(row.modules or [])
+    extra = row.extra or {}
+    if "ppe" not in modules:
+        return modules
+    labels = list(extra.get("ppe_labels") or ["nohairnet", "nomask"])
+    out = [m for m in modules if m != "ppe"]
+    out.extend(labels)
+    return out
+
+
 def _serialize(row: Camera) -> dict[str, Any]:
     worker = SHARDS.get_worker(row.name)
     live = worker.status() if worker else {}
@@ -75,6 +110,7 @@ def _serialize(row: Camera) -> dict[str, Any]:
         "detect_fps": row.detect_fps,
         "stream_role": row.stream_role,
         "modules": row.modules or [],
+        "display_modules": _display_modules(row),
         "extra": row.extra or {},
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "runtime": live,
@@ -95,6 +131,7 @@ def create_camera(payload: CameraIn, db: Session = Depends(get_session)):
     if db.query(Camera).filter(Camera.name == name).first():
         raise HTTPException(400, f"Camera name already exists: {name}")
     mapped_id = _compose_camera_id(name, payload.camera_id)
+    modules, extra = _normalize_modules(payload.modules, payload.extra)
     row = Camera(
         name=name,
         camera_id=mapped_id,
@@ -103,8 +140,8 @@ def create_camera(payload: CameraIn, db: Session = Depends(get_session)):
         device=payload.device,
         detect_fps=payload.detect_fps,
         stream_role=payload.stream_role,
-        modules=payload.modules,
-        extra=payload.extra,
+        modules=modules,
+        extra=extra,
     )
     db.add(row)
     db.commit()
@@ -137,6 +174,13 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
         if "camera_id" not in data and row.camera_id.startswith(f"{row.name}_"):
             raw_id = row.camera_id[len(row.name) + 1 :]
         data["camera_id"] = _compose_camera_id(next_name, raw_id)
+    if "modules" in data or "extra" in data:
+        modules, extra = _normalize_modules(
+            data.get("modules", row.modules),
+            data.get("extra", row.extra),
+        )
+        data["modules"] = modules
+        data["extra"] = extra
     for key, value in data.items():
         setattr(row, key, value)
     db.commit()

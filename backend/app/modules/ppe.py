@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .base import CameraContext, DetectionEvent
+from .overlay import append_overlays
 
 VIOLATION_CLASSES = {2: "nohairnet", 3: "nomask"}
 
@@ -65,6 +66,13 @@ class PPEModule:
     def unload(self) -> None:
         self.model = None
 
+    def _enabled_labels(self, ctx: CameraContext) -> set[str]:
+        extra = ctx.state.get("extra") or {}
+        selected = extra.get("ppe_labels") or extra.get("labels")
+        if selected:
+            return {str(x) for x in selected}
+        return set(self.labels)
+
     def _boxes_same_person(self, box_a, box_b) -> bool:
         iou_thresh = float(self.config.get("iou_dedup_threshold", 0.25))
         center_px = float(self.config.get("center_dedup_distance_px", 280))
@@ -110,6 +118,7 @@ class PPEModule:
         cooldown = float(self.config.get("cooldown_seconds", 45))
         min_conf = min(conf_map.values())
         tracker = self.config.get("tracker", "bytetrack.yaml")
+        enabled = self._enabled_labels(ctx)
         state = ctx.state.setdefault("ppe", {"uploaded": []})
         now = time.time()
 
@@ -124,6 +133,7 @@ class PPEModule:
 
         pending: list[dict[str, Any]] = []
         events: list[DetectionEvent] = []
+        live_overlays: list[dict[str, Any]] = []
 
         for result in results:
             if result.boxes is None:
@@ -138,11 +148,14 @@ class PPEModule:
             )
             for box, cls_id, score, track_id in zip(boxes, classes, scores, ids):
                 label = VIOLATION_CLASSES.get(int(cls_id))
-                if label is None:
+                if label is None or label not in enabled:
                     continue
                 if float(score) < conf_map.get(label, 0.78):
                     continue
                 box_list = [float(v) for v in box]
+                # Always draw live detections (ppe2 visible_groups)
+                live_overlays.append({"label": label, "box": box_list, "score": float(score)})
+
                 if self._is_duplicate(state, label, track_id, box_list, pending, now, cooldown):
                     continue
                 pending.append(
@@ -173,7 +186,7 @@ class PPEModule:
                     )
                 )
 
-        # prune history (2x cooldown like ppe2)
+        append_overlays(ctx.state, live_overlays)
         cutoff = now - cooldown * 2
         state["uploaded"] = [e for e in state["uploaded"] if e["event_time"] >= cutoff]
         return events

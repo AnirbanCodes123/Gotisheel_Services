@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .base import CameraContext, DetectionEvent
+from .overlay import append_overlays
 
 
 def _iou(a, b) -> float:
@@ -339,13 +340,23 @@ class LoiteringModule:
 
         miss_gap = float(cfg.get("miss_gap_seconds", 180))
         events: list[DetectionEvent] = []
+        live = []
         for person_key, bbox, score, _yolo_id in assignments:
             slot = state["person_slots"].get(person_key)
             if not slot:
                 continue
             present = self._presence_seconds(slot, now, miss_gap)
+            overdue = present >= threshold
+            live.append(
+                {
+                    "label": f"{person_key} {int(present)}s",
+                    "box": bbox,
+                    "score": score,
+                    "color": (0, 0, 255) if overdue else (0, 140, 255),
+                }
+            )
             can_upload = (not slot.get("uploaded_at")) or (now - float(slot["uploaded_at"]) >= cooldown)
-            if present >= threshold and can_upload:
+            if overdue and can_upload:
                 slot["uploaded_at"] = now
                 events.append(
                     DetectionEvent(
@@ -357,5 +368,6 @@ class LoiteringModule:
                         frame=frame.copy(),
                     )
                 )
+        append_overlays(ctx.state, live)
         ctx.state["active_tracks"] = len(assignments)
         return events
