@@ -107,28 +107,59 @@ class Go2rtcClient:
             return {"streams": {}}
         with open(self.config_path, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
-        data.setdefault("streams", {})
+        if not isinstance(data, dict):
+            data = {}
+        # streams may be null in yaml (`streams:` with no mapping) — never leave None
+        streams = data.get("streams")
+        if not isinstance(streams, dict):
+            data["streams"] = {}
         return data
 
     def _save_yaml(self, data: dict[str, Any]) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        if not isinstance(data.get("streams"), dict):
+            data["streams"] = {}
         with open(self.config_path, "w", encoding="utf-8") as handle:
             yaml.safe_dump(data, handle, default_flow_style=False)
 
     def _upsert_yaml(self, stream_name: str, rtsp_url: str) -> None:
-        data = self._load_yaml()
-        data.setdefault("streams", {})[stream_name] = rtsp_url
-        data.setdefault("api", {}).setdefault("listen", ":1984")
-        webrtc = data.setdefault("webrtc", {})
-        webrtc.setdefault("listen", ":8555")
-        # Help browsers on the same host connect ICE candidates.
-        candidates = webrtc.setdefault("candidates", [])
-        for candidate in ("127.0.0.1", "stun:stun.l.google.com:19302"):
-            if candidate not in candidates:
-                candidates.append(candidate)
-        self._save_yaml(data)
+        try:
+            data = self._load_yaml()
+            streams = data.setdefault("streams", {})
+            if not isinstance(streams, dict):
+                streams = {}
+                data["streams"] = streams
+            streams[stream_name] = rtsp_url
+            api = data.setdefault("api", {})
+            if not isinstance(api, dict):
+                api = {}
+                data["api"] = api
+            api.setdefault("listen", ":1984")
+            webrtc = data.setdefault("webrtc", {})
+            if not isinstance(webrtc, dict):
+                webrtc = {}
+                data["webrtc"] = webrtc
+            webrtc.setdefault("listen", ":8555")
+            # Help browsers on the same host connect ICE candidates.
+            candidates = webrtc.get("candidates")
+            if not isinstance(candidates, list):
+                candidates = []
+                webrtc["candidates"] = candidates
+            for candidate in ("127.0.0.1", "stun:stun.l.google.com:19302"):
+                if candidate not in candidates:
+                    candidates.append(candidate)
+            self._save_yaml(data)
+        except Exception as exc:
+            print(f"[go2rtc] yaml upsert failed for {stream_name}: {exc}")
 
     def _remove_yaml(self, stream_name: str) -> None:
-        data = self._load_yaml()
-        data.get("streams", {}).pop(stream_name, None)
-        self._save_yaml(data)
+        try:
+            data = self._load_yaml()
+            streams = data.get("streams")
+            if not isinstance(streams, dict):
+                data["streams"] = {}
+            else:
+                streams.pop(stream_name, None)
+            self._save_yaml(data)
+        except Exception as exc:
+            print(f"[go2rtc] yaml remove failed for {stream_name}: {exc}")

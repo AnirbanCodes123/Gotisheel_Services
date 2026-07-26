@@ -67,7 +67,10 @@ class ShardManager:
             for name in list(self.workers.keys()):
                 if name not in desired:
                     self.workers[name].stop()
-                    self.go2rtc.unregister(name)
+                    try:
+                        self.go2rtc.unregister(name)
+                    except Exception as exc:
+                        print(f"[shard] go2rtc unregister {name}: {exc}")
                     del self.workers[name]
 
             for name, cam in desired.items():
@@ -85,15 +88,20 @@ class ShardManager:
                         worker = CameraWorker(cam, on_events=self._on_events)
                         worker.start()
                         self.workers[name] = worker
-                        self.go2rtc.register_rtsp(name, cam["rtsp_url"])
+                        try:
+                            self.go2rtc.register_rtsp(name, cam["rtsp_url"])
+                        except Exception as exc:
+                            print(f"[shard] go2rtc register {name}: {exc}")
                 else:
                     worker = CameraWorker(cam, on_events=self._on_events)
                     worker.start()
                     self.workers[name] = worker
-                    self.go2rtc.register_rtsp(name, cam["rtsp_url"])
+                    try:
+                        self.go2rtc.register_rtsp(name, cam["rtsp_url"])
+                    except Exception as exc:
+                        print(f"[shard] go2rtc register {name}: {exc}")
 
         print(f"[shard] active cameras={len(self.workers)}")
-
     def _on_events(self, camera: dict[str, Any], events: list) -> None:
         for detection in events:
             EVENT_SERVICE.handle_detection(
