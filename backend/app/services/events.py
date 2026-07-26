@@ -95,6 +95,7 @@ class EventService:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.recent: list[dict[str, Any]] = []
+        self._temp_id = -1
 
     def handle_detection(
         self,
@@ -103,16 +104,15 @@ class EventService:
         camera_id: str,
         detection: DetectionEvent,
     ) -> dict[str, Any]:
+        """Publish to UI immediately, then persist + webhook in background work."""
         config = get_config()
         webhook = config.get("webhook", {})
         events_dir = Path(config["paths"]["events_dir"])
         events_dir.mkdir(parents=True, exist_ok=True)
-
-        # Upload mapping must be the full ppe-style id (name_site_camera)
         upload_camera_id = (camera_id or "").strip() or camera_name
 
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        base = f"{camera_name}_{detection.label}_{stamp}"
+        base = f"{camera_name}_{detection.label}_{stamp}_{int(time.time() * 1000) % 100000}"
         image_path = ""
         thumb_path = ""
         image_bytes = None
@@ -134,13 +134,35 @@ class EventService:
                 )
             image_bytes = _compress_jpeg(annotated, int(webhook.get("event_image_max_kb", 900)))
             size = webhook.get("thumbnail_size", [175, 175])
-            thumb_bytes = _thumbnail(annotated, (int(size[0]), int(size[1])), int(webhook.get("thumbnail_max_kb", 25)))
+            thumb_bytes = _thumbnail(
+                annotated, (int(size[0]), int(size[1])), int(webhook.get("thumbnail_max_kb", 25))
+            )
             if image_bytes:
                 image_path = str(events_dir / f"{base}.jpg")
                 Path(image_path).write_bytes(image_bytes)
             if thumb_bytes:
                 thumb_path = str(events_dir / f"{base}_thumb.jpg")
                 Path(thumb_path).write_bytes(thumb_bytes)
+
+        # Optimistic UI payload first (instant Events page)
+        with self._lock:
+            self._temp_id -= 1
+            temp_id = self._temp_id
+        payload = {
+            "id": temp_id,
+            "camera_name": camera_name,
+            "camera_id": upload_camera_id,
+            "label": detection.label,
+            "module_id": detection.module_id,
+            "detail": detection.detail,
+            "uploaded": False,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "thumbnail_path": thumb_path,
+            "pending": True,
+        }
+        with self._lock:
+            self.recent.insert(0, payload)
+            self.recent = self.recent[:200]
 
         uploaded = False
         if webhook.get("enabled") and image_bytes is not None:
@@ -171,7 +193,7 @@ class EventService:
             session.add(row)
             session.commit()
             session.refresh(row)
-            payload = {
+            final = {
                 "id": row.id,
                 "camera_name": camera_name,
                 "camera_id": upload_camera_id,
@@ -179,16 +201,27 @@ class EventService:
                 "module_id": detection.module_id,
                 "detail": detection.detail,
                 "uploaded": uploaded,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else payload["created_at"],
                 "thumbnail_path": thumb_path,
+                "pending": False,
             }
         finally:
             session.close()
 
         with self._lock:
-            self.recent.insert(0, payload)
-            self.recent = self.recent[:200]
-        return payload
+            # Replace optimistic temp entry with persisted row
+            self.recent = [final if e.get("id") == temp_id else e for e in self.recent]
+            # Dedup if both exist
+            seen = set()
+            cleaned = []
+            for e in self.recent:
+                key = e.get("id")
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned.append(e)
+            self.recent = cleaned[:200]
+        return final
 
     def _post_webhook(
         self,
@@ -234,6 +267,10 @@ class EventService:
             return False
 
     def list_recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        # Prefer in-memory list for instant Events page (includes optimistic entries)
+        with self._lock:
+            if self.recent:
+                return list(self.recent[:limit])
         session = session_factory()
         try:
             rows = session.query(Event).order_by(Event.id.desc()).limit(limit).all()
@@ -248,6 +285,7 @@ class EventService:
                     "uploaded": row.uploaded,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "thumbnail_path": row.thumbnail_path,
+                    "pending": False,
                 }
                 for row in rows
             ]

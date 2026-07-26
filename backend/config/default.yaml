@@ -11,7 +11,7 @@ shards:
   max_workers: 32
 
 detect:
-  default_fps: 4.0
+  default_fps: 12.0   # ppe2-like snappy detect; lower if GPU overloaded
   jpeg_quality: 80
 
 stream:

@@ -89,6 +89,7 @@ function setView(view) {
     btn.classList.toggle("active", btn.dataset.view === view);
   });
   render({ force: true });
+  if (view === "events") refresh({ light: true });
 }
 
 function updateChrome() {
@@ -129,8 +130,56 @@ function patchCamerasTable() {
   return true;
 }
 
-async function refresh() {
+async function refreshLiveFps() {
+  // Lightweight runtime poll — updates FPS pills without reloading MJPEG/images
   try {
+    const runtime = await api("/api/runtime");
+    const cams = runtime?.cameras || {};
+    let changed = false;
+    state.cameras = (state.cameras || []).map((cam) => {
+      const live = cams[cam.name];
+      if (!live) return cam;
+      changed = true;
+      return {
+        ...cam,
+        runtime: {
+          ...(cam.runtime || {}),
+          ...live,
+          online: Boolean(live.online),
+          capture_fps: live.capture_fps,
+          detect_fps: live.detect_fps,
+          display_fps: live.display_fps,
+        },
+      };
+    });
+    if (changed) {
+      updateChrome();
+      patchLiveCards();
+    }
+  } catch (error) {
+    console.warn("live fps refresh failed:", error);
+  }
+}
+
+async function refresh(options = {}) {
+  const light = Boolean(options.light);
+  try {
+    if (light && state.view === "live") {
+      await refreshLiveFps();
+      return;
+    }
+    if (light && state.view === "events") {
+      // Fast path: only events — avoids full page rebuild / thumbnail flicker
+      const events = await api("/api/events?limit=40");
+      state.events = events;
+      if (document.getElementById("events-list")) {
+        patchEventsList();
+      } else {
+        render({ force: true });
+      }
+      return;
+    }
+
     const [cameras, modules, events, system, config, models] = await Promise.all([
       api("/api/cameras"),
       api("/api/modules"),
@@ -157,6 +206,11 @@ async function refresh() {
     if (state.view === "live" && document.querySelector("[data-cam-card]")) {
       if (patchLiveCards()) return;
     }
+    // Soft-update Events without reloading every thumbnail
+    if (state.view === "events" && document.getElementById("events-list")) {
+      patchEventsList();
+      return;
+    }
     if (isEditingForm()) {
       return;
     }
@@ -175,13 +229,15 @@ async function refresh() {
 function formatFps(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return "0.0";
+  // Show one decimal for stable realtime readout
   return n.toFixed(1);
 }
 
 function liveFpsLabel(cam) {
-  const cap = formatFps(cam.runtime?.capture_fps);
-  const det = formatFps(cam.runtime?.detect_fps);
-  return `FPS ${cap}<span class="muted-fps">det ${det}</span>`;
+  // Prefer display_fps (what live MJPEG is actually publishing), fall back to capture
+  const live = cam.runtime?.display_fps || cam.runtime?.capture_fps;
+  const det = cam.runtime?.detect_fps;
+  return `FPS ${formatFps(live)}<span class="muted-fps">det ${formatFps(det)}</span>`;
 }
 
 function patchLiveCards() {
@@ -206,9 +262,10 @@ function patchLiveCards() {
     if (fps) fps.innerHTML = liveFpsLabel(cam);
     const metaFps = card.querySelector("[data-meta-fps]");
     if (metaFps) {
-      metaFps.textContent = `Current FPS ${formatFps(cam.runtime?.capture_fps)} · detect ${formatFps(
-        cam.runtime?.detect_fps
-      )}`;
+      const live = cam.runtime?.display_fps || cam.runtime?.capture_fps;
+      metaFps.textContent = `Live ${formatFps(live)} FPS · capture ${formatFps(
+        cam.runtime?.capture_fps
+      )} · detect ${formatFps(cam.runtime?.detect_fps)}`;
     }
     const device = card.querySelector("[data-meta-device]");
     if (device) device.textContent = `device ${cam.runtime?.device || cam.device || "global"}`;
@@ -330,23 +387,70 @@ function renderCameras() {
   </div>`;
 }
 
+function eventRowHtml(ev) {
+  const thumb = ev.thumbnail_path
+    ? `/api/event-media?path=${encodeURIComponent(ev.thumbnail_path)}`
+    : "";
+  const pending = ev.pending ? " · pending" : "";
+  return `<div class="event-row" data-event-id="${esc(ev.id)}">
+    ${thumb ? `<img src="${thumb}" alt="" loading="lazy" onerror="this.style.visibility='hidden'" />` : `<div></div>`}
+    <div>
+      <strong>${esc(ev.label)}</strong> · ${esc(ev.camera_name)}
+      <div class="muted">${esc(ev.created_at)} · uploaded=${esc(ev.uploaded)}${pending} · ${esc(ev.module_id)}</div>
+      <div class="muted">${esc(JSON.stringify(ev.detail || {}))}</div>
+    </div>
+  </div>`;
+}
+
 function renderEvents() {
-  if (!state.events.length) return `<div class="card" style="padding:16px" class="muted">No events yet</div>`;
-  return `<div class="card">${state.events
-    .map((ev) => {
-      const thumb = ev.thumbnail_path
-        ? `/api/event-media?path=${encodeURIComponent(ev.thumbnail_path)}`
-        : "";
-      return `<div class="event-row">
-        ${thumb ? `<img src="${thumb}" alt="" onerror="this.style.visibility='hidden'" />` : `<div></div>`}
-        <div>
-          <strong>${esc(ev.label)}</strong> · ${esc(ev.camera_name)}
-          <div class="muted">${esc(ev.created_at)} · uploaded=${esc(ev.uploaded)} · ${esc(ev.module_id)}</div>
-          <div class="muted">${esc(JSON.stringify(ev.detail || {}))}</div>
-        </div>
-      </div>`;
-    })
-    .join("")}</div>`;
+  if (!state.events.length) {
+    return `<div class="card" id="events-list" style="padding:16px"><div class="muted">No events yet</div></div>`;
+  }
+  return `<div class="card" id="events-list">${state.events.map(eventRowHtml).join("")}</div>`;
+}
+
+function patchEventsList() {
+  const root = document.getElementById("events-list");
+  if (!root) return false;
+  if (!state.events.length) {
+    root.innerHTML = `<div class="muted">No events yet</div>`;
+    return true;
+  }
+  const existing = new Map(
+    [...root.querySelectorAll("[data-event-id]")].map((el) => [String(el.dataset.eventId), el])
+  );
+  const nextIds = new Set(state.events.map((e) => String(e.id)));
+  // Remove rows that disappeared
+  existing.forEach((el, id) => {
+    if (!nextIds.has(id)) el.remove();
+  });
+  // Prepend / update in order without full rebuild (keeps loaded thumbnails)
+  let anchor = root.firstElementChild;
+  state.events.forEach((ev) => {
+    const id = String(ev.id);
+    let row = existing.get(id);
+    if (!row) {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = eventRowHtml(ev);
+      row = wrap.firstElementChild;
+      if (anchor) root.insertBefore(row, anchor);
+      else root.appendChild(row);
+    } else {
+      // Update text bits only (don't touch <img> src)
+      const strong = row.querySelector("strong");
+      if (strong) strong.textContent = ev.label || "";
+      const muted = row.querySelectorAll(".muted");
+      if (muted[0]) {
+        muted[0].textContent = `${ev.created_at || ""} · uploaded=${ev.uploaded}${
+          ev.pending ? " · pending" : ""
+        } · ${ev.module_id || ""}`;
+      }
+      if (muted[1]) muted[1].textContent = JSON.stringify(ev.detail || {});
+      if (anchor && row !== anchor) root.insertBefore(row, anchor);
+    }
+    anchor = row.nextElementSibling;
+  });
+  return true;
 }
 
 function renderModules() {
@@ -465,6 +569,9 @@ function render(options = {}) {
   if (!options.force && state.view === "live" && document.querySelector("[data-cam-card]")) {
     if (patchLiveCards()) return;
   }
+  if (!options.force && state.view === "events" && document.getElementById("events-list")) {
+    if (patchEventsList()) return;
+  }
 
   const map = {
     live: renderLive,
@@ -560,4 +667,15 @@ document.getElementById("btn-reload").onclick = async () => {
 };
 
 refresh();
-setInterval(refresh, 4000);
+// Fast ticker: Live FPS ~2Hz, Events 1Hz, full refresh every 4s
+let _tick = 0;
+setInterval(() => {
+  _tick += 1;
+  if (state.view === "live") {
+    refresh({ light: true }); // /api/runtime only — realtime FPS
+  } else if (state.view === "events") {
+    refresh({ light: true });
+  } else if (_tick % 8 === 0) {
+    refresh();
+  }
+}, 500);

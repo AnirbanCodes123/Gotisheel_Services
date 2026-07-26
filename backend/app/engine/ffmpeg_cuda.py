@@ -149,7 +149,7 @@ class FFmpegCudaCapture:
                         self._latest = frame
                     frames += 1
                     elapsed = time.time() - t0
-                    if elapsed >= 1.0:
+                    if elapsed >= 0.5:
                         self._fps = frames / elapsed
                         frames = 0
                         t0 = time.time()
@@ -223,7 +223,7 @@ class OpenCVCapture:
                 self._error = None
                 frames += 1
                 elapsed = time.time() - t0
-                if elapsed >= 1.0:
+                if elapsed >= 0.5:
                     self._fps = frames / elapsed
                     frames = 0
                     t0 = time.time()

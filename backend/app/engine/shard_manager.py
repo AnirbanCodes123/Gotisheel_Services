@@ -103,13 +103,17 @@ class ShardManager:
 
         print(f"[shard] active cameras={len(self.workers)}")
     def _on_events(self, camera: dict[str, Any], events: list) -> None:
+        # Already invoked from a background thread by CameraWorker
         for detection in events:
-            EVENT_SERVICE.handle_detection(
-                camera_pk=camera.get("id"),
-                camera_name=camera.get("name", ""),
-                camera_id=camera.get("camera_id", ""),
-                detection=detection,
-            )
+            try:
+                EVENT_SERVICE.handle_detection(
+                    camera_pk=camera.get("id"),
+                    camera_name=camera.get("name", ""),
+                    camera_id=camera.get("camera_id", ""),
+                    detection=detection,
+                )
+            except Exception as exc:
+                print(f"[shard] event handle error cam={camera.get('name')}: {exc}")
 
     def _process_job(self, job: InferJob) -> list:
         worker = self.workers.get(job.camera_key)

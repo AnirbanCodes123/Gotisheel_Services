@@ -1,4 +1,4 @@
-"""Per-camera capture + detect worker (runs inside a shard process/thread group)."""
+"""Per-camera capture + detect worker — inline inference like ppe_bypass/ppe2.py."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import numpy as np
 
 from ..core.config import get_config
 from ..engine.ffmpeg_cuda import create_capture
-from ..engine.infer_scheduler import InferJob, SCHEDULER
+from ..modules import REGISTRY
 from ..modules.base import CameraContext, DetectionEvent
 from ..modules.overlay import draw_overlays
 
@@ -32,6 +32,7 @@ class CameraWorker:
         self.online = False
         self.capture_fps = 0.0
         self.detect_fps = 0.0
+        self.display_fps = 0.0
         self.last_error: Optional[str] = None
         self.ctx = CameraContext(
             key=self.key,
@@ -45,10 +46,12 @@ class CameraWorker:
         self.ctx.state["overlays"] = []
         self._detect_counter = 0
         self._detect_t0 = time.time()
+        self._display_counter = 0
+        self._display_t0 = time.time()
+        self._loop_counter = 0
+        self._loop_t0 = time.time()
         self._lock = threading.Lock()
-        self._overlay_lock = threading.Lock()
-        self._latest_overlays: list[dict[str, Any]] = []
-        self._overlays_expire_at = 0.0
+        self._emit_pool_lock = threading.Lock()
 
     def start(self) -> None:
         if self._running:
@@ -73,8 +76,9 @@ class CameraWorker:
             "name": self.key,
             "camera_id": self.ctx.camera_id,
             "online": self.online,
-            "capture_fps": round(self.capture_fps, 2),
-            "detect_fps": round(self.detect_fps, 2),
+            "capture_fps": round(float(self.capture_fps), 2),
+            "detect_fps": round(float(self.detect_fps), 2),
+            "display_fps": round(float(self.display_fps), 2),
             "modules": self.ctx.modules,
             "device": self.ctx.device or get_config().get("hardware", {}).get("device"),
             "error": self.last_error,
@@ -83,7 +87,7 @@ class CameraWorker:
                 "person_count": self.ctx.state.get("person_count"),
                 "active_tracks": self.ctx.state.get("active_tracks"),
                 "sling_pending": self.ctx.state.get("sling_pending"),
-                "overlay_count": len(self._latest_overlays),
+                "overlay_count": len(self.ctx.state.get("overlays") or []),
             },
         }
 
@@ -91,63 +95,96 @@ class CameraWorker:
         with self._lock:
             return self.latest_jpeg
 
-    def _encode(self, frame: np.ndarray) -> None:
+    def _set_jpeg(self, frame: np.ndarray) -> None:
         quality = int(get_config().get("detect", {}).get("jpeg_quality", 80))
-        # Draw last inference overlays onto live preview (ppe2-style)
-        with self._overlay_lock:
-            overlays = list(self._latest_overlays) if time.time() <= self._overlays_expire_at else []
-        annotated = draw_overlays(frame, overlays)
-        ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if ok:
             with self._lock:
                 self.latest_jpeg = buf.tobytes()
 
-    def _on_infer_done(self, camera_key: str, events: list) -> None:
-        self._detect_counter += 1
-        elapsed = time.time() - self._detect_t0
-        if elapsed >= 1.0:
-            self.detect_fps = self._detect_counter / elapsed
-            self._detect_counter = 0
-            self._detect_t0 = time.time()
-        # Capture overlays produced during this inference tick
-        overlays = list(self.ctx.state.get("overlays") or [])
-        with self._overlay_lock:
-            self._latest_overlays = overlays
-            # Keep boxes visible briefly between detect ticks
-            self._overlays_expire_at = time.time() + 1.5
-        if events and self.on_events:
-            self.on_events(self.camera, events)
+    def _emit_events_async(self, events: list[DetectionEvent]) -> None:
+        if not events or not self.on_events:
+            return
+
+        def _run():
+            try:
+                self.on_events(self.camera, events)
+            except Exception as exc:
+                print(f"[{self.key}] event emit error: {exc}")
+
+        threading.Thread(target=_run, name=f"evt-{self.key}", daemon=True).start()
 
     def _loop(self) -> None:
+        """Inline detect+draw like ppe2.process_single_frame — same frame, immediate overlay."""
         config = get_config()
-        detect_fps = float(self.camera.get("detect_fps") or 0) or float(config.get("detect", {}).get("default_fps", 4))
+        # ppe2 runs every captured frame; default higher FPS for snappy boxes
+        detect_fps = float(self.camera.get("detect_fps") or 0) or float(
+            config.get("detect", {}).get("default_fps", 12)
+        )
         min_interval = 1.0 / max(detect_fps, 0.1)
-        last_submit = 0.0
+        last_detect = 0.0
         role = self.camera.get("stream_role") or "both"
+        last_overlays: list[dict[str, Any]] = []
 
         while self._running:
             frame = self.capture.get_frame() if self.capture else None
             if frame is None:
                 self.online = False
                 self.last_error = getattr(self.capture, "error", None) or "waiting for frames"
-                time.sleep(0.05)
+                time.sleep(0.02)
                 continue
 
             self.online = True
             self.last_error = getattr(self.capture, "error", None)
-            self.capture_fps = getattr(self.capture, "fps", 0.0) or self.capture_fps
-            if role in ("live", "both"):
-                self._encode(frame)
-
             now = time.time()
-            if role in ("detect", "both") and self.ctx.modules and now - last_submit >= min_interval:
-                last_submit = now
-                SCHEDULER.submit(
-                    InferJob(
-                        camera_key=self.key,
-                        frame=frame,
-                        modules=list(self.ctx.modules),
-                        callback=self._on_infer_done,
-                    )
-                )
-            time.sleep(0.01)
+            display = frame
+
+            # Realtime loop FPS (worker consume rate) — update every 0.5s
+            self._loop_counter += 1
+            loop_elapsed = now - self._loop_t0
+            if loop_elapsed >= 0.5:
+                self.capture_fps = self._loop_counter / loop_elapsed
+                self._loop_counter = 0
+                self._loop_t0 = now
+            # Prefer capture-backend fps when available, else loop fps
+            backend_fps = float(getattr(self.capture, "fps", 0.0) or 0.0)
+            if backend_fps > 0:
+                self.capture_fps = backend_fps
+
+            do_detect = (
+                role in ("detect", "both")
+                and self.ctx.modules
+                and (now - last_detect) >= min_interval
+            )
+            if do_detect:
+                last_detect = now
+                try:
+                    REGISTRY.ensure_loaded()
+                    events = REGISTRY.process_frame(frame, self.ctx, list(self.ctx.modules))
+                    last_overlays = list(self.ctx.state.get("overlays") or [])
+                    # Draw on THIS frame (ppe2 style) before publishing JPEG
+                    display = draw_overlays(frame, last_overlays)
+                    self._detect_counter += 1
+                    elapsed = now - self._detect_t0
+                    if elapsed >= 0.5:
+                        self.detect_fps = self._detect_counter / elapsed
+                        self._detect_counter = 0
+                        self._detect_t0 = now
+                    if events:
+                        self._emit_events_async(events)
+                except Exception as exc:
+                    self.last_error = f"detect: {exc}"
+                    print(f"[{self.key}] detect error: {exc}")
+            elif role in ("live", "both") and last_overlays:
+                # Between detect ticks keep last boxes visible (short persistence)
+                display = draw_overlays(frame, last_overlays)
+
+            if role in ("live", "both"):
+                self._set_jpeg(display)
+                self._display_counter += 1
+                disp_elapsed = now - self._display_t0
+                if disp_elapsed >= 0.5:
+                    self.display_fps = self._display_counter / disp_elapsed
+                    self._display_counter = 0
+                    self._display_t0 = now
+            time.sleep(0.001)
