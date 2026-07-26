@@ -387,13 +387,19 @@ function renderCameras() {
   </div>`;
 }
 
+function eventThumbUrl(ev) {
+  const p = ev.thumbnail_path || "";
+  if (!p) return "";
+  // Basename-only query avoids %2F absolute-path breakage behind proxies
+  const name = String(p).split(/[/\\]/).pop();
+  return name ? `/api/event-media?name=${encodeURIComponent(name)}` : "";
+}
+
 function eventRowHtml(ev) {
-  const thumb = ev.thumbnail_path
-    ? `/api/event-media?path=${encodeURIComponent(ev.thumbnail_path)}`
-    : "";
+  const thumb = eventThumbUrl(ev);
   const pending = ev.pending ? " · pending" : "";
   return `<div class="event-row" data-event-id="${esc(ev.id)}">
-    ${thumb ? `<img src="${thumb}" alt="" loading="lazy" onerror="this.style.visibility='hidden'" />` : `<div></div>`}
+    ${thumb ? `<img src="${thumb}" alt="" loading="lazy" />` : `<div class="event-thumb-placeholder"></div>`}
     <div>
       <strong>${esc(ev.label)}</strong> · ${esc(ev.camera_name)}
       <div class="muted">${esc(ev.created_at)} · uploaded=${esc(ev.uploaded)}${pending} · ${esc(ev.module_id)}</div>
@@ -436,7 +442,7 @@ function patchEventsList() {
       if (anchor) root.insertBefore(row, anchor);
       else root.appendChild(row);
     } else {
-      // Update text bits only (don't touch <img> src)
+      // Update text; attach/replace thumb if it was missing
       const strong = row.querySelector("strong");
       if (strong) strong.textContent = ev.label || "";
       const muted = row.querySelectorAll(".muted");
@@ -446,6 +452,19 @@ function patchEventsList() {
         } · ${ev.module_id || ""}`;
       }
       if (muted[1]) muted[1].textContent = JSON.stringify(ev.detail || {});
+      const thumbUrl = eventThumbUrl(ev);
+      let img = row.querySelector("img");
+      if (thumbUrl) {
+        if (!img) {
+          const ph = row.querySelector(".event-thumb-placeholder");
+          img = document.createElement("img");
+          img.alt = "";
+          img.loading = "lazy";
+          if (ph) ph.replaceWith(img);
+          else row.insertBefore(img, row.firstChild);
+        }
+        if (img.getAttribute("src") !== thumbUrl) img.src = thumbUrl;
+      }
       if (anchor && row !== anchor) root.insertBefore(row, anchor);
     }
     anchor = row.nextElementSibling;

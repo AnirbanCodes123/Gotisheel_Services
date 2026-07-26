@@ -68,15 +68,36 @@ def runtime():
 
 
 @router.get("/event-media")
-def event_media(path: str):
+def event_media(path: str = "", name: str = ""):
+    """Serve event image/thumbnail from events_dir.
+
+    Prefer `name` (basename only) — absolute `path` query values break behind
+    many proxies because encoded slashes (%2F) are stripped or rejected.
+    """
     from pathlib import Path
     from fastapi import HTTPException
     from fastapi.responses import FileResponse
 
-    file_path = Path(path).resolve()
     events_root = Path(get_config()["paths"]["events_dir"]).resolve()
-    if events_root not in file_path.parents and file_path != events_root:
+    candidate = (name or path or "").strip()
+    if not candidate:
+        raise HTTPException(400, "Missing media path")
+
+    raw = Path(candidate)
+    # Always resolve under events_dir by basename when possible
+    file_path = (events_root / raw.name).resolve()
+    try:
+        file_path.relative_to(events_root)
+    except ValueError:
         raise HTTPException(403, "Invalid media path")
-    if not file_path.exists():
-        raise HTTPException(404, "File not found")
+    if not file_path.is_file():
+        # Fallback: allow full absolute path still under events_root
+        alt = Path(candidate).expanduser().resolve()
+        try:
+            alt.relative_to(events_root)
+        except ValueError:
+            raise HTTPException(404, "File not found")
+        if not alt.is_file():
+            raise HTTPException(404, "File not found")
+        file_path = alt
     return FileResponse(file_path)
